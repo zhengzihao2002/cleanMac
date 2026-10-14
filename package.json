@@ -1,0 +1,10 @@
+{
+  "name": "cleanmac",
+  "productName": "cleanMac",
+  "version": "1.0.0",
+  "description": "Safely reclaim macOS \"System Data\": app caches, logs and developer leftovers.",
+  "main": "src/main/main.js",
+  "private": true,
+  "license": "MIT",
+  "author": "cleanMac contributors"
+}

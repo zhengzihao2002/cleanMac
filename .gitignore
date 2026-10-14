@@ -1,0 +1,7 @@
+# Everything cleanMac downloads or builds lives in these two places.
+# Deleting the project folder removes them too.
+/.runtime/
+/cleanMac.app/
+
+.DS_Store
+node_modules/
