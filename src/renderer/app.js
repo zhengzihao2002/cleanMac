@@ -38,6 +38,9 @@
     deep: { loaded: false, apps: [], errors: [], filter: '', showUnavailable: false, status: 'idle', preview: null, selected: new Set(), result: null, error: '', progress: null },
   };
   const byId = new Map();
+  const viewCache = new Map();
+  const viewFilters = new Map();
+  let activeView = null;
   let modalFocus = null;
   const deepBusy = () => ['loading', 'previewing', 'removing'].includes(S.deep.status);
 
@@ -730,7 +733,29 @@
     else if (S.phase === 'done') html = viewDone();
     else if (S.phase === 'results') html = viewResults();
     else html = viewIdle();
-    el.view.innerHTML = html;
+    const key = S.view === 'deep-delete'
+      ? `deep:${deepBusy() ? S.deep.status : S.deep.result ? 'result' : S.deep.preview ? S.deep.preview.id : 'apps'}`
+      : S.view === 'home' ? `home:${S.phase}` : S.view;
+    if (activeView) {
+      activeView.scroll = el.view.scrollTop;
+      activeView.nodes = [...el.view.childNodes];
+    }
+    let cached = viewCache.get(key);
+    if (cached && cached.html === html) {
+      if (cached !== activeView) el.view.replaceChildren(...cached.nodes);
+    } else {
+      const scroll = cached?.scroll || 0;
+      el.view.innerHTML = html;
+      cached = { key, html, scroll, nodes: [...el.view.childNodes] };
+      viewCache.set(key, cached);
+    }
+    activeView = cached;
+    el.view.scrollTop = cached.scroll;
+    if (viewCache.size > 32) {
+      for (const [oldKey, entry] of viewCache) {
+        if (entry !== activeView) { viewCache.delete(oldKey); break; }
+      }
+    }
 
     if (S.phase === 'results' && S.view === 'home' && !S.animatedTotal) {
       S.animatedTotal = true;
@@ -1119,27 +1144,50 @@
 
   async function setMode(mode) {
     S.settings.mode = mode === 'delete' ? 'delete' : 'trash';
+    updateModeControls();
     try {
       S.settings = await api.setSettings({ mode: S.settings.mode });
     } catch {
       /* keep local */
     }
     if (el.modal.innerHTML) openConfirm();
-    if (S.view === 'settings') renderView();
+    updateModeControls();
     renderActionBar();
+  }
+
+  function updateModeControls() {
+    for (const button of el.view.querySelectorAll('[data-action="set-mode"]')) {
+      const on = button.dataset.mode === S.settings.mode;
+      button.classList.toggle('on', on);
+      button.setAttribute('aria-checked', String(on));
+    }
+    if (activeView?.key === 'settings') activeView.html = viewSettings();
+  }
+
+  function updateUpdateControls() {
+    const button = $('[data-action="update"]', el.view);
+    if (button) {
+      button.disabled = S.update.busy;
+      // Keep the button and surrounding Settings DOM mounted during the check.
+      button.lastChild.textContent = S.update.busy ? 'Checking / Updating…' : 'Check for Updates';
+    }
+    const status = $('#update-status');
+    if (status) status.textContent = S.update.message;
+    if (activeView?.key === 'settings') activeView.html = viewSettings();
   }
 
   function navigate(view) {
     if (deepBusy()) return;
     if ((S.phase === 'scanning' || S.phase === 'cleaning') && view !== 'settings' && view !== 'home') return;
     if (view.startsWith('cat:') && !S.scan) return;
-    if (view !== S.view) S.filter = '';
+    if (view === S.view) return;
+    viewFilters.set(S.view, S.filter);
+    S.filter = viewFilters.get(view) || '';
     S.view = view;
     if (view === 'home' && S.phase === 'done' && S.scan) {
       // keep showing the result screen
     }
     render();
-    el.view.scrollTop = 0;
     if (view === 'deep-delete' && !S.deep.loaded && !S.deep.result) loadDeepApps();
   }
 
@@ -1226,7 +1274,7 @@
       case 'update':
         if (S.update.busy) break;
         S.update = { busy: true, message: 'Starting update…' };
-        renderView();
+        updateUpdateControls();
         try {
           const result = await api.update();
           S.update.message = result.upToDate
@@ -1236,7 +1284,7 @@
           S.update.message = `Update failed. Your current app is unchanged. ${err.message}`;
         } finally {
           S.update.busy = false;
-          if (S.view === 'settings') renderView();
+          if (S.view === 'settings') updateUpdateControls();
         }
         break;
       case 'open-trash':
@@ -1315,8 +1363,7 @@
     api.onCleanProgress(onCleanProgress);
     if (api.onUpdateProgress) api.onUpdateProgress((message) => {
       S.update.message = message;
-      const node = $('#update-status');
-      if (node) node.textContent = message;
+      updateUpdateControls();
     });
     if (api.onDeepProgress) api.onDeepProgress((p) => {
       S.deep.progress = p;

@@ -41,8 +41,10 @@ window.ICONS = (() => {
   }
 
   // The cleanMac mark: a gradient squircle with a sparkle.
+  const logoIds = new Map();
   function logo(size = 32) {
-    const id = `lg${Math.random().toString(36).slice(2, 8)}`;
+    if (!logoIds.has(size)) logoIds.set(size, `lg${Math.random().toString(36).slice(2, 8)}`);
+    const id = logoIds.get(size);
     return `<svg width="${size}" height="${size}" viewBox="0 0 64 64" aria-hidden="true">
       <defs>
         <linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">

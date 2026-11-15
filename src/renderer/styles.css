@@ -196,7 +196,6 @@ body.no-vibrancy .sb-drag {
   overflow-y: auto;
   overflow-x: hidden;
   padding: 4px 36px 128px;
-  scroll-behavior: smooth;
 }
 .view::-webkit-scrollbar {
   width: 10px;
@@ -1288,7 +1287,6 @@ body.no-vibrancy .sb-drag {
   backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%);
   box-shadow: var(--shadow-lg);
-  animation: rise 0.45s var(--ease);
 }
 .ab-info {
   flex: 1;
@@ -1970,6 +1968,8 @@ body.no-vibrancy .sb-drag {
 }
 
 .deep-native-icon { flex: 0 0 40px; object-fit: contain; }
+#view { overflow-anchor: none; }
+#update-status { min-height: 1.6em; }
 .deep-group-title { grid-column: 1 / -1; margin: 12px 0 0; font-size: 12px; color: var(--text-2); }
 .deep-visibility { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; font-size: 12px; color: var(--text-2); cursor: pointer; }
 .deep-visibility input { accent-color: var(--accent); }
@@ -2005,9 +2005,7 @@ body.no-vibrancy .sb-drag {
 
 /* -------------------------------------------------------------- animation */
 
-.fade-in {
-  animation: fade-up 0.45s var(--ease);
-}
+/* Views switch without fading the whole screen on navigation or local changes. */
 @keyframes fade-up {
   from {
     opacity: 0;

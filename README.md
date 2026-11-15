@@ -76,6 +76,8 @@ No account, no `sudo`, nothing installed outside the folder.
 
 Click **Settings → Check for Updates** to compare the installed build's source commit with this repository's default
 branch on GitHub. Matching commits display **Already up to date** without downloading source, building or relaunching.
+Update progress changes only the button and status text in Settings. Navigation retains screen scroll positions and
+search filters, without replaying a full-screen fade or scrolling back to the top.
 If a new commit exists, cleanMac downloads that exact revision, downloads the build runtime if needed, builds and signs
 a fresh app. It quits, replaces `cleanMac.app` in the original project folder, then opens that same app path automatically.
 No Terminal commands or Git installation are needed for updates. Unknown source revisions produce a clear error without
