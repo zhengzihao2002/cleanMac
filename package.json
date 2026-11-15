@@ -1,7 +1,7 @@
 {
   "name": "cleanmac",
   "productName": "cleanMac",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Review macOS storage, clean caches and uninstall apps with Deep Delete.",
   "main": "src/main/main.js",
   "private": true,

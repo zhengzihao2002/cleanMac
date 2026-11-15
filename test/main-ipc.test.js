@@ -76,8 +76,10 @@ async function host(overrides = {}) {
       ...overrides.system,
     },
     './deep-delete': { createDeepDelete: () => deep },
+    './app-icons': { appIcon: async () => null },
     './updater': { prepareUpdate: async () => ({ application: '/test/update.app', version: '1.1.0' }),
       migrateLegacyUpdate: async () => false, cleanupUpdateCopies: async () => 0,
+      relaunchFromPath: async (target) => { calls.relaunched++; calls.relaunchPath = target; },
       launchUpdate: async (...args) => calls.installs.push(args), ...overrides.updater },
   };
   const filename = path.resolve(__dirname, '../src/main/main.js');
@@ -141,6 +143,7 @@ test('window close, quit and relaunch cannot interrupt a cleanup', async () => {
   await removal;
   await h.invoke('app:relaunch');
   assert.equal(h.calls.relaunched, 1);
+  assert.equal(h.calls.relaunchPath, '/test/cleanMac/cleanMac.app');
 });
 
 test('invalid persisted cleanup modes fall back to Trash', async () => {

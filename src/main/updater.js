@@ -175,4 +175,15 @@ async function cleanupUpdateCopies(appPath, runningPaths = []) {
   return removed;
 }
 
-module.exports = { prepareUpdate, SOURCE, LATEST, launchUpdate, migrateLegacyUpdate, cleanupUpdateCopies };
+async function relaunchFromPath(application) {
+  const target = await fs.realpath(application);
+  if (!target.endsWith('.app')) throw new Error('Invalid application location.');
+  await fs.access(path.join(target, 'Contents/MacOS/cleanMac'));
+  await new Promise((resolve, reject) => {
+    const child = spawn('/bin/bash', [path.join(__dirname, 'relaunch-app.sh'), String(process.pid), target], { detached: true, stdio: 'ignore' });
+    child.once('error', reject);
+    child.once('spawn', () => { child.unref(); resolve(); });
+  });
+}
+
+module.exports = { prepareUpdate, SOURCE, LATEST, launchUpdate, migrateLegacyUpdate, cleanupUpdateCopies, relaunchFromPath };

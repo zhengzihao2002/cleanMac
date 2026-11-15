@@ -14,7 +14,8 @@ const { scan } = require('./scanner');
 const { CATEGORIES } = require('./categories');
 const { clean } = require('./cleaner');
 const system = require('./system');
-const { prepareUpdate, launchUpdate, migrateLegacyUpdate, cleanupUpdateCopies } = require('./updater');
+const { appIcon } = require('./app-icons');
+const { prepareUpdate, launchUpdate, migrateLegacyUpdate, cleanupUpdateCopies, relaunchFromPath } = require('./updater');
 const { createDeepDelete } = require('./deep-delete');
 
 const isMac = process.platform === 'darwin';
@@ -39,10 +40,10 @@ const guard = createGuard({
   ownPaths: [env.projectRoot, env.sessionDir].filter(Boolean),
 });
 const deep = createDeepDelete({
-  getIcon: async (target) => {
-    const image = await app.getFileIcon(target, { size: 'normal' });
-    return image.isEmpty() ? null : image.toDataURL();
-  },
+  getIcon: (target) => appIcon(target, {
+    cacheRoot: path.join(env.projectRoot || env.sessionDir, '.runtime', 'icons'),
+    fileIcon: (p) => app.getFileIcon(p, { size: 'normal' }),
+  }),
   home: env.home,
   ownPaths: [env.projectRoot, env.sessionDir, app.getAppPath()].filter(Boolean),
   ownBundleIds: [env.bundleId],
@@ -334,10 +335,8 @@ function registerIpc() {
 
   handle('app:relaunch', async () => {
     requireIdle();
-    // app.exit() skips 'will-quit', so sweep explicitly.
-    runtime.sweepOnExit(env.sessionDir);
-    app.relaunch();
-    app.exit(0);
+    if (!(await migrateLegacyUpdate(app.getAppPath()))) await relaunchFromPath(path.join(env.projectRoot, 'cleanMac.app'));
+    app.quit();
   });
 
   handle('settings:get', async () => ({ ...settings }));

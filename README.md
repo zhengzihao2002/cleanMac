@@ -130,6 +130,8 @@ contain settings, sign-ins or saved work. You can reveal individual items in Fin
 Apps display their native macOS icons when available. The list initially shows only apps ready for removal, sorted
 alphabetically. **Show unavailable apps** reveals open apps and protected apps in separate groups below removable apps.
 Open apps must be quit before removal; protected apps remain locked.
+Bundle ICNS files are converted with macOS's `sips` tool into PNGs cached inside `.runtime/icons`, with the native file
+icon API as a fallback. Permission relaunches explicitly open the original `cleanMac.app` path after the process exits.
 
 Deep Delete matches **exact bundle identifiers**, including well-formed device-specific preference names, plus an
 explicit list of app-specific support folders for Chrome, Edge, Brave, Slack, Discord and Visual Studio Code. For example,

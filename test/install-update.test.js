@@ -8,6 +8,20 @@ const { promisify } = require('util');
 const { makeTempDir, cleanupHome } = require('./fixtures');
 const { prepareUpdate } = require('../src/main/updater');
 
+test('permission relaunch opens the exact original app path after the old process exits', async (t) => {
+  const root = makeTempDir('permission-relaunch-');
+  t.after(() => cleanupHome(root));
+  const target = path.join(root, 'Desktop/cleanMac/cleanMac.app');
+  const open = path.join(root, 'open');
+  const opened = path.join(root, 'opened');
+  await fs.writeFile(open, '#!/bin/bash\nprintf "%s" "$2" > "$TEST_OPEN_LOG"\n', { mode: 0o700 });
+  const script = (await fs.readFile(path.join(__dirname, '../src/main/relaunch-app.sh'), 'utf8')).replaceAll('/usr/bin/open', '"$TEST_OPEN"');
+  const helper = path.join(root, 'relaunch.sh');
+  await fs.writeFile(helper, script);
+  await promisify(execFile)('/bin/bash', [helper, '2147483647', target], { env: { ...process.env, TEST_OPEN: open, TEST_OPEN_LOG: opened } });
+  assert.equal(await fs.readFile(opened, 'utf8'), target);
+});
+
 for (const failVerification of [false, true]) test(`installer ${failVerification ? 'restores the original app on verification failure' : 'replaces the original path and next update check does nothing'}`, async (t) => {
   const root = makeTempDir('install-update-');
   t.after(() => cleanupHome(root));
