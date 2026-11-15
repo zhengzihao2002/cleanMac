@@ -35,7 +35,7 @@
     clean: { done: 0, total: 0, current: '' },
     cleanResult: null,
     animatedTotal: false,
-    deep: { loaded: false, apps: [], errors: [], filter: '', status: 'idle', preview: null, selected: new Set(), result: null, error: '', progress: null },
+    deep: { loaded: false, apps: [], errors: [], filter: '', showUnavailable: false, status: 'idle', preview: null, selected: new Set(), result: null, error: '', progress: null },
   };
   const byId = new Map();
   let modalFocus = null;
@@ -572,14 +572,27 @@
     </div>`;
   }
 
+  function deepAppIcon(a) {
+    return typeof a.icon === 'string' && a.icon.startsWith('data:image/png;base64,')
+      ? `<img class="deep-native-icon" src="${esc(a.icon)}" alt="" width="40" height="40">`
+      : `<span class="avatar" style="--h:${hue(a.name)}">${esc(initial(a.name))}</span>`;
+  }
+
   function deepAppList() {
     const query = S.deep.filter.trim().toLowerCase();
-    const apps = S.deep.apps.filter((a) => `${a.name} ${a.bundleId} ${a.path}`.toLowerCase().includes(query));
-    return apps.length ? `<div class="deep-app-grid">${apps.map((a) => `<button class="deep-app ${a.protected ? 'is-protected' : ''}" data-action="deep-preview" data-id="${esc(a.id)}" ${a.protected ? 'disabled' : ''} aria-label="${esc(a.protected ? a.name + ': ' + a.reason : 'Review ' + a.name)}">
-      <span class="avatar" style="--h:${hue(a.name)}">${esc(initial(a.name))}</span>
+    const rank = (a) => a.protected ? 2 : a.running ? 1 : 0;
+    const apps = S.deep.apps.filter((a) => (S.deep.showUnavailable || rank(a) === 0) && `${a.name} ${a.bundleId} ${a.path}`.toLowerCase().includes(query))
+      .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
+    let previous = -1;
+    return apps.length ? `<div class="deep-app-grid">${apps.map((a) => {
+      const group = rank(a);
+      const heading = group !== previous ? `<h2 class="deep-group-title">${['Ready to remove', 'Open apps · quit before removal', 'Protected apps'][group]}</h2>` : '';
+      previous = group;
+      return `${heading}<button class="deep-app ${a.protected ? 'is-protected' : ''}" data-action="deep-preview" data-id="${esc(a.id)}" ${a.protected ? 'disabled' : ''} aria-label="${esc(a.protected ? a.name + ': ' + a.reason : 'Review ' + a.name)}">
+      ${deepAppIcon(a)}
       <span class="deep-app-body"><b>${esc(a.name)}</b><span class="deep-app-id">${esc(a.bundleId)}</span><span class="deep-app-path">${esc(a.path)}</span>${a.protected ? `<span class="deep-app-reason">${icon('lock', 12)}${esc(a.reason || 'Protected application')}</span>` : a.running ? `<span class="deep-app-reason">${icon('running', 12)}Open · quit before removal</span>` : ''}</span>
       ${icon(a.protected ? 'lock' : 'chevronRight', 16)}
-    </button>`).join('')}</div>` : `<div class="empty">${icon('search', 28)}<b>${query ? 'No matching apps' : 'No applications found'}</b>${query ? 'Try an app name or bundle identifier.' : 'Apps in Applications and your personal Applications folder appear here.'}</div>`;
+    </button>`; }).join('')}</div>` : `<div class="empty">${icon('search', 28)}<b>${query ? 'No matching apps' : 'No removable apps found'}</b>${S.deep.showUnavailable ? 'Try another search or refresh the app list.' : 'Open and protected apps are hidden. Turn on Show unavailable apps to see them.'}</div>`;
   }
 
   function deepSelectedItems() {
@@ -625,7 +638,7 @@
       const p = d.preview;
       const dataCount = p.items.filter((i) => i.kind !== 'application' && i.selectable !== false).length;
       return `<div class="fade-in">${head}<button class="btn btn-ghost btn-sm deep-back" data-action="deep-apps">${icon('chevronLeft', 15)}Choose another app</button>
-        <section class="panel deep-identity"><span class="avatar" style="--h:${hue(p.app.name)}">${esc(initial(p.app.name))}</span><div><h2>${esc(p.app.name)}</h2><span class="mono">${esc(p.app.bundleId)}</span><div class="deep-path">${esc(p.app.path)}</div></div><button class="btn btn-secondary btn-sm" data-action="deep-preview" data-id="${esc(p.app.id)}">${icon('refresh', 14)}Refresh Preview</button></section>
+        <section class="panel deep-identity">${deepAppIcon(p.app)}<div><h2>${esc(p.app.name)}</h2><span class="mono">${esc(p.app.bundleId)}</span><div class="deep-path">${esc(p.app.path)}</div></div><button class="btn btn-secondary btn-sm" data-action="deep-preview" data-id="${esc(p.app.id)}">${icon('refresh', 14)}Refresh Preview</button></section>
         ${p.running || p.app.running ? `<div class="notice">${icon('running', 17)}<span><b>${esc(p.app.name)} is open.</b> Quit it, then refresh this preview before removing files.</span></div>` : ''}
         ${d.error ? `<div class="notice" role="alert">${icon('warning', 17)}<span>${esc(d.error)}</span></div>` : ''}
         <div class="deep-review-note">${icon('eye', 19)}<div><b>Choose what to remove</b><p>${dataCount ? 'Related files are unchecked. They can contain settings, downloads, or local app data. Read each path before including it.' : 'No additional files with an exact ownership match were found in accessible locations.'}</p></div></div>
@@ -637,7 +650,8 @@
     return `<div class="fade-in">${head}<div class="deep-intro"><div>${icon('shield', 22)}<div><b>Review first. Recover from Trash.</b><p>Pick an app to see its bundle and files matched by its exact identifier or a known app-specific location. Related data stays unchecked until you choose it.</p></div></div><span>System apps and shared files are protected.</span></div>
       ${d.error ? `<div class="notice" role="alert">${icon('warning', 17)}<span>${esc(d.error)}</span></div>` : ''}
       ${d.errors.map((n) => `<div class="notice">${icon('info', 16)}<span>${esc(typeof n === 'string' ? n : n.message || n.path || 'Some applications could not be read.')}</span></div>`).join('')}
-      <div class="list-toolbar"><label class="search deep-search">${icon('search', 15)}<input id="deep-filter" type="search" aria-label="Search installed apps" placeholder="Search apps or bundle IDs" value="${esc(d.filter)}" spellcheck="false"></label><div class="spacer"></div><span class="deep-count">${plural(d.apps.filter((a) => !a.protected).length, 'available app')}</span></div>
+      <div class="list-toolbar"><label class="search deep-search">${icon('search', 15)}<input id="deep-filter" type="search" aria-label="Search installed apps" placeholder="Search apps or bundle IDs" value="${esc(d.filter)}" spellcheck="false"></label><div class="spacer"></div><span class="deep-count">${plural(d.apps.filter((a) => !a.protected && !a.running).length, 'removable app')}</span></div>
+      <label class="deep-visibility"><input type="checkbox" id="deep-show-unavailable" ${d.showUnavailable ? 'checked' : ''}>Show unavailable apps (${d.apps.filter((a) => a.protected || a.running).length})</label>
       <div id="deep-app-list">${deepAppList()}</div><p class="deep-footnote">Deep Delete always uses the Trash, even if Smart Scan is set to delete immediately. Empty the Trash yourself when you are ready to reclaim the space.</p></div>`;
   }
 
@@ -1240,6 +1254,12 @@
   });
 
   document.addEventListener('input', (e) => {
+    if (e.target.id === 'deep-show-unavailable') {
+      S.deep.showUnavailable = e.target.checked;
+      const list = $('#deep-app-list');
+      if (list) list.innerHTML = deepAppList();
+      return;
+    }
     if (e.target.id === 'deep-filter') {
       S.deep.filter = e.target.value;
       const list = $('#deep-app-list');

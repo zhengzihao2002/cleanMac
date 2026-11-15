@@ -124,6 +124,10 @@ files found in known Library locations. Only the app bundle is selected initiall
 application support data, saved state, web data and sandbox containers must each be selected explicitly: they may
 contain settings, sign-ins or saved work. You can reveal individual items in Finder and refresh the preview.
 
+Apps display their native macOS icons when available. The list initially shows only apps ready for removal, sorted
+alphabetically. **Show unavailable apps** reveals open apps and protected apps in separate groups below removable apps.
+Open apps must be quit before removal; protected apps remain locked.
+
 Deep Delete matches **exact bundle identifiers**, including well-formed device-specific preference names, plus an
 explicit list of app-specific support folders for Chrome, Edge, Brave, Slack, Discord and Visual Studio Code. For example,
 Chrome can include `~/Library/Application Support/Google/Chrome`, while leaving sibling Google folders alone. These

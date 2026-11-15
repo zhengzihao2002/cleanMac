@@ -38,6 +38,10 @@ const guard = createGuard({
   ownPaths: [env.projectRoot, env.sessionDir].filter(Boolean),
 });
 const deep = createDeepDelete({
+  getIcon: async (target) => {
+    const image = await app.getFileIcon(target, { size: 'normal' });
+    return image.isEmpty() ? null : image.toDataURL();
+  },
   home: env.home,
   ownPaths: [env.projectRoot, env.sessionDir, app.getAppPath()].filter(Boolean),
   ownBundleIds: [env.bundleId],

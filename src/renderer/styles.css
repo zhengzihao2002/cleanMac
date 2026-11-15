@@ -1969,6 +1969,11 @@ body.no-vibrancy .sb-drag {
   }
 }
 
+.deep-native-icon { flex: 0 0 40px; object-fit: contain; }
+.deep-group-title { grid-column: 1 / -1; margin: 12px 0 0; font-size: 12px; color: var(--text-2); }
+.deep-visibility { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; font-size: 12px; color: var(--text-2); cursor: pointer; }
+.deep-visibility input { accent-color: var(--accent); }
+
 /* ------------------------------------------------------------------ toast */
 
 #toast-root {

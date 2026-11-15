@@ -12,7 +12,7 @@ const os = require('os');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { readPlistStrings } = require('./plist');
-const { measure } = require('./sizer');
+const { measure, createPool } = require('./sizer');
 const system = require('./system');
 const { BUNDLE_ID } = require('./runtime');
 
@@ -63,6 +63,7 @@ function createDeepDelete({
   runningApps = () => system.runningApps(home, { strict: true }),
   trashItem,
   measurePath = measure,
+  getIcon = async () => null,
   platform = process.platform,
 } = {}) {
   if (typeof home !== 'string' || !path.isAbsolute(home) || path.normalize(home) === '/') throw new Error('Invalid home folder.');
@@ -134,7 +135,7 @@ function createDeepDelete({
 
   function publicApp(app, running) {
     return { id: app.id, name: app.name, bundleId: app.bundleId, path: app.path,
-      protected: !!app.reason, reason: app.reason || null, running: runningName(app, running) };
+      protected: !!app.reason, reason: app.reason || null, running: runningName(app, running), icon: app.icon || null };
   }
 
   async function listApps() {
@@ -185,7 +186,11 @@ function createDeepDelete({
       previews.clear();
       appDirectories = directories;
       catalogComplete = errors.length === 0;
-      for (const app of discovered.values()) apps.set(app.id, app);
+      const iconPool = createPool(8);
+      await Promise.all([...discovered.values()].map((app) => iconPool(async () => {
+        try { app.icon = await getIcon(app.path); } catch { app.icon = null; }
+        apps.set(app.id, app);
+      })));
       return { apps: [...apps.values()].map((a) => publicApp(a, running)).sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path)), errors };
     } finally { listing = false; }
   }

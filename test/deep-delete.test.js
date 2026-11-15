@@ -339,3 +339,22 @@ test('Deep Delete uses explicit app-specific support mappings without deleting v
   assert.ok(fs.existsSync(sibling));
   assert.ok(fs.existsSync(path.dirname(profile)), 'Vendor parent survives');
 });
+
+test('Deep Delete supplies native icons to the list and preview, with fallback on icon failures', async (t) => {
+  const calls = [];
+  const icon = 'data:image/png;base64,example';
+  const f = fixture(t, { getIcon: async (target) => {
+    calls.push(target);
+    if (target.endsWith('NoIcon.app')) throw new Error('Icon unavailable');
+    return icon;
+  } });
+  const app = application(f.appRoot);
+  application(f.appRoot, 'NoIcon', 'org.example.Other');
+  const result = await f.service.listApps();
+  const normal = result.apps.find((a) => a.name === 'Example');
+  assert.equal(normal.icon, icon);
+  assert.equal(result.apps.find((a) => a.name === 'NoIcon').icon, null);
+  assert.equal((await f.service.preview(normal.id)).app.icon, icon);
+  assert.ok(calls.includes(app));
+  assert.equal(f.moved.length, 0);
+});
