@@ -650,8 +650,8 @@
 
       <section class="panel">
         <h3>Updates</h3>
-        <p>Download the latest source from github.com/zhengzihao2002/cleanMac, build and sign it on this Mac, then open the updated app. The current app and source edits are kept. Updates use extra disk space inside the original cleanMac folder; keep that folder.</p>
-        <button class="btn btn-secondary btn-sm" data-action="update" ${S.update.busy ? 'disabled' : ''}>${icon('refresh', 15)}${S.update.busy ? 'Updating…' : 'Download & Rebuild Update'}</button>
+        <p>Check github.com/zhengzihao2002/cleanMac for a newer source commit. If this build is current, nothing is downloaded or rebuilt. Otherwise, build and open the update automatically. The current app and source edits are kept. Updates use extra disk space inside the original cleanMac folder; keep that folder.</p>
+        <button class="btn btn-secondary btn-sm" data-action="update" ${S.update.busy ? 'disabled' : ''}>${icon('refresh', 15)}${S.update.busy ? 'Checking / Updating…' : 'Check for Updates'}</button>
         <p id="update-status" role="status">${esc(S.update.message)}</p>
       </section>
 
@@ -1213,8 +1213,8 @@
         S.update = { busy: true, message: 'Starting update…' };
         renderView();
         try {
-          await api.update();
-          S.update.message = 'Update opened. You can close this version.';
+          const result = await api.update();
+          S.update.message = result.upToDate ? 'Already up to date.' : 'Update opened. You can close this version.';
         } catch (err) {
           S.update.message = `Update failed. Your current app is unchanged. ${err.message}`;
         } finally {

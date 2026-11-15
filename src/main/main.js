@@ -334,6 +334,7 @@ function registerIpc() {
     try {
       const result = await prepareUpdate({ projectRoot: env.projectRoot, appPath: app.getAppPath(), currentVersion: app.getVersion(),
         progress: (message) => send('update:progress', message) });
+      if (result.upToDate) return result;
       send('update:progress', `Opening cleanMac ${result.version}…`);
       await launchUpdate(result.application);
       updating = false;

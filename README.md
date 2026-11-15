@@ -74,9 +74,11 @@ No account, no `sudo`, nothing installed outside the folder.
 
 ### Updating from Settings
 
-Click **Settings → Download & Rebuild Update** to fetch this repository's default branch from GitHub, download
-the build runtime if needed, build and sign a fresh app, and open it automatically. The current app closes after
-the new copy opens. No Terminal commands or Git installation are needed for updates.
+Click **Settings → Check for Updates** to compare the installed build's source commit with this repository's default
+branch on GitHub. Matching commits display **Already up to date** without downloading source, building or relaunching.
+If a new commit exists, cleanMac downloads that exact revision, downloads the build runtime if needed, builds and signs
+a fresh app, and opens it automatically. The current app closes after the new copy opens. No Terminal commands or Git
+installation are needed for updates. Legacy builds without a recorded commit need one update to establish this baseline.
 
 Updates build in separate version folders inside the original project's `.runtime/updates` folder. Keep the original
 folder: it contains the updated apps too. Local source edits and previous app versions are retained, and your cleanup

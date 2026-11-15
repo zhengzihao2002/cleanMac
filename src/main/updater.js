@@ -5,6 +5,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 
 const SOURCE = 'https://codeload.github.com/zhengzihao2002/cleanMac/zip/HEAD';
+const LATEST = 'https://api.github.com/repos/zhengzihao2002/cleanMac/commits?per_page=1';
 
 function run(file, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -21,16 +22,26 @@ async function prepareUpdate({ projectRoot, appPath, currentVersion, platform = 
   if (platform !== 'darwin') throw new Error('Automatic updates are available on macOS.');
   if (!projectRoot) throw new Error('The cleanMac source folder could not be found.');
   let updateRoot = path.join(projectRoot, '.runtime', 'updates');
+  let installedCommit = null;
   try {
     const info = JSON.parse(await fs.readFile(path.join(appPath, 'build-info.json'), 'utf8'));
     if (typeof info.updateRoot === 'string' && path.isAbsolute(info.updateRoot)) updateRoot = info.updateRoot;
+    installedCommit = info.sourceCommit;
   } catch { /* development or first update */ }
+  progress('Checking GitHub for updates…');
+  const metadata = await execute('/usr/bin/curl', ['--fail', '--location', '--proto', '=https', '--proto-redir', '=https', '--connect-timeout', '15', '--max-time', '30', '--silent', '--show-error', '--header', 'Accept: application/vnd.github+json', '--header', 'User-Agent: cleanMac-updater', LATEST]);
+  const latest = JSON.parse(metadata)?.[0]?.sha;
+  if (typeof latest !== 'string' || !/^[a-f0-9]{40}$/.test(latest)) throw new Error('GitHub did not return a valid source revision.');
+  if (installedCommit === latest) {
+    progress('Already up to date.');
+    return { upToDate: true, version: currentVersion };
+  }
   await fs.mkdir(updateRoot, { recursive: true, mode: 0o700 });
   const job = await fs.mkdtemp(path.join(updateRoot, 'version-'));
   try {
     progress('Downloading the latest source from GitHub…');
     const archive = path.join(job, 'source.zip');
-    await execute('/usr/bin/curl', ['--fail', '--location', '--proto', '=https', '--proto-redir', '=https', '--retry', '2', '--connect-timeout', '30', '--max-time', '300', '--output', archive, SOURCE]);
+    await execute('/usr/bin/curl', ['--fail', '--location', '--proto', '=https', '--proto-redir', '=https', '--retry', '2', '--connect-timeout', '30', '--max-time', '300', '--output', archive, SOURCE.replace(/HEAD$/, latest)]);
     progress('Extracting the update…');
     const extracted = path.join(job, 'source');
     await execute('/usr/bin/ditto', ['-x', '-k', archive, extracted]);
@@ -51,7 +62,7 @@ async function prepareUpdate({ projectRoot, appPath, currentVersion, platform = 
     await fs.access(path.join(root, 'build.sh'));
     progress('Building and signing the update locally. This may take several minutes…');
     await execute('/bin/bash', [path.join(root, 'build.sh'), '--no-open'], {
-      cwd: root, env: { ...process.env, CLEANMAC_UPDATE_ROOT: updateRoot },
+      cwd: root, env: { ...process.env, CLEANMAC_UPDATE_ROOT: updateRoot, CLEANMAC_SOURCE_COMMIT: latest },
     });
     const application = path.join(root, 'cleanMac.app');
     await fs.access(path.join(application, 'Contents/MacOS/cleanMac'));
@@ -69,4 +80,4 @@ async function prepareUpdate({ projectRoot, appPath, currentVersion, platform = 
   }
 }
 
-module.exports = { prepareUpdate, SOURCE, launchUpdate: (application) => run('/usr/bin/open', ['-n', application]) };
+module.exports = { prepareUpdate, SOURCE, LATEST, launchUpdate: (application) => run('/usr/bin/open', ['-n', application]) };

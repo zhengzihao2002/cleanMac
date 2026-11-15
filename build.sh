@@ -189,8 +189,13 @@ cp "$ROOT/package.json" "$APP_DIR/package.json"
 ditto "$ROOT/src" "$APP_DIR/src"
 
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+SOURCE_COMMIT="${CLEANMAC_SOURCE_COMMIT:-}"
+if [ -z "$SOURCE_COMMIT" ] && [ -d "$ROOT/.git" ]; then
+  SOURCE_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+fi
 cat >"$APP_DIR/build-info.json" <<EOF
 {
+  "sourceCommit": "$(json_escape "$SOURCE_COMMIT")",
   "projectRoot": "$(json_escape "$ROOT")",
   "updateRoot": "$(json_escape "${CLEANMAC_UPDATE_ROOT:-$ROOT/.runtime/updates}")",
   "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
