@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { makeTempDir, cleanupHome } = require('./fixtures');
-const { createSessionDir, removeStaleSessions } = require('../src/main/runtime');
+const { createSessionDir, removeStaleSessions, configure } = require('../src/main/runtime');
 const { readXmlStrings, readBinary } = require('../src/main/plist');
 const { walkBytes, measure } = require('../src/main/sizer');
 
@@ -39,6 +39,30 @@ test('stale session cleanup leaves links, unrelated names and live sessions alon
   for (const dir of [live, unrelated, data]) assert.equal(fs.existsSync(dir), true);
   assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
   assert.equal(fs.readFileSync(path.join(data, 'keep'), 'utf8'), 'important');
+});
+
+test('startup recovers from an inherited build temp directory that was removed', (t) => {
+  const root = makeTempDir('missing-build-temp-');
+  const original = process.env.TMPDIR;
+  let sessionDir;
+  t.after(() => {
+    if (original === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = original;
+    if (sessionDir) cleanupHome(sessionDir);
+    cleanupHome(root);
+  });
+  const missing = path.join(root, '.runtime/tmp');
+  process.env.TMPDIR = missing;
+  const paths = {};
+  const env = configure({ isPackaged: false, getAppPath: () => root,
+    setPath: (key, value) => { paths[key] = value; }, commandLine: { appendSwitch() {} } });
+  sessionDir = env.sessionDir;
+  assert.equal(fs.existsSync(missing), false);
+  assert.equal(fs.statSync(sessionDir).mode & 0o077, 0);
+  assert.equal(paths.temp, sessionDir);
+  assert.equal(fs.statSync(require('os').tmpdir()).isDirectory(), true);
+  const subsequent = createSessionDir();
+  cleanupHome(subsequent);
 });
 
 test('XML plist identity comes only from the root dictionary', () => {

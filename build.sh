@@ -33,6 +33,7 @@ STAGE="$RUNTIME/stage"
 APP="$ROOT/$APP_NAME.app"
 
 # Keep every temporary file of the build inside this folder too.
+BUILD_LAUNCH_TMPDIR="${TMPDIR:-/tmp}"
 export TMPDIR="$RUNTIME/tmp/"
 
 OPEN_APP=1
@@ -227,5 +228,5 @@ printf '  Open it any time by double-clicking %s.app in this folder.\n' "$APP_NA
 printf '  To remove cleanMac completely: run ./uninstall.sh, or just delete this folder.\n\n'
 
 if [ "$OPEN_APP" -eq 1 ]; then
-  open "$APP"
+  TMPDIR="$BUILD_LAUNCH_TMPDIR" open "$APP"
 fi

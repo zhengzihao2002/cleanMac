@@ -27,7 +27,15 @@ const SESSION_PREFIX = 'cleanmac-session-';
 function createSessionDir(tempRoot = os.tmpdir()) {
   // mkdtemp creates the directory atomically. Reusing a predictable name could
   // write Chromium data through a directory or symlink left by another process.
-  const root = fs.realpathSync(tempRoot);
+  let root;
+  try {
+    root = fs.realpathSync(tempRoot);
+  } catch (error) {
+    if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+    // A launcher may inherit build.sh's already-removed temporary folder.
+    // Use the OS temporary area without recreating a build-owned directory.
+    root = fs.realpathSync('/tmp');
+  }
   return fs.mkdtempSync(path.join(root, `${SESSION_PREFIX}${process.pid}-`), { encoding: 'utf8' });
 }
 
@@ -91,6 +99,10 @@ function configure(app) {
   const home = os.homedir();
   removeStaleSessions();
   const sessionDir = createSessionDir();
+  // Later Node helpers also use os.tmpdir(); don't leave them pointing at
+  // the missing build directory. Keep this root stable across app relaunches.
+  process.env.TMPDIR = path.dirname(sessionDir);
+  app.setPath('temp', sessionDir);
 
   // Must happen before the app is ready, so nothing is ever written to the
   // default locations in ~/Library.
