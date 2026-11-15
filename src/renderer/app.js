@@ -664,7 +664,8 @@
 
       <section class="panel">
         <h3>Updates</h3>
-        <p>Check github.com/zhengzihao2002/cleanMac for a newer source commit. If this build is current, nothing is downloaded or rebuilt. Otherwise, build and open the update automatically. The current app and source edits are kept. Updates use extra disk space inside the original cleanMac folder; keep that folder.</p>
+        <p><b>Running cleanMac ${esc(app.version || '')}</b> · Build ${esc(app.sourceCommit ? app.sourceCommit.slice(0, 10) : 'unknown')}<br><span class="deep-path">${esc(app.applicationPath || '')}</span></p>
+        <p>Check GitHub for a newer build. If this build is current, nothing is downloaded or rebuilt. Updates replace cleanMac.app in the original cleanMac folder and remove old update copies after startup succeeds. Your source edits are kept. Everything stays inside that folder.</p>
         <button class="btn btn-secondary btn-sm" data-action="update" ${S.update.busy ? 'disabled' : ''}>${icon('refresh', 15)}${S.update.busy ? 'Checking / Updating…' : 'Check for Updates'}</button>
         <p id="update-status" role="status">${esc(S.update.message)}</p>
       </section>
@@ -1228,7 +1229,9 @@
         renderView();
         try {
           const result = await api.update();
-          S.update.message = result.upToDate ? 'Already up to date.' : 'Update opened. You can close this version.';
+          S.update.message = result.upToDate
+            ? `Already up to date.${result.removedCopies ? ` Removed ${result.removedCopies} old update folder(s) from this Mac.` : ''}`
+            : 'Installing the update at the original app location…';
         } catch (err) {
           S.update.message = `Update failed. Your current app is unchanged. ${err.message}`;
         } finally {

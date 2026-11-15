@@ -96,6 +96,9 @@ done
 if pgrep -f "$APP/Contents/MacOS/$APP_NAME" >/dev/null 2>&1; then
   fail "cleanMac is running. Quit it first, then run ./build.sh again."
 fi
+if [ "${CLEANMAC_UPDATER_BUILD:-0}" != 1 ] && pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+  fail "Another copy of cleanMac is running. Quit every cleanMac window before rebuilding."
+fi
 
 if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = "1" ]; then
   ARCH="arm64"
@@ -193,6 +196,10 @@ SOURCE_COMMIT="${CLEANMAC_SOURCE_COMMIT:-}"
 if [ -z "$SOURCE_COMMIT" ] && [ -d "$ROOT/.git" ]; then
   SOURCE_COMMIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
 fi
+if [ -z "$SOURCE_COMMIT" ] && [ -f "$ROOT/.source-commit" ]; then
+  ARCHIVE_COMMIT="$(tr -d '\r\n' < "$ROOT/.source-commit")"
+  if [[ "$ARCHIVE_COMMIT" =~ ^[a-f0-9]{40}$ ]]; then SOURCE_COMMIT="$ARCHIVE_COMMIT"; fi
+fi
 cat >"$APP_DIR/build-info.json" <<EOF
 {
   "sourceCommit": "$(json_escape "$SOURCE_COMMIT")",
@@ -233,5 +240,5 @@ printf '  Open it any time by double-clicking %s.app in this folder.\n' "$APP_NA
 printf '  To remove cleanMac completely: run ./uninstall.sh, or just delete this folder.\n\n'
 
 if [ "$OPEN_APP" -eq 1 ]; then
-  TMPDIR="$BUILD_LAUNCH_TMPDIR" open "$APP"
+  TMPDIR="$BUILD_LAUNCH_TMPDIR" open -n "$APP"
 fi

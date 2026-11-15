@@ -65,6 +65,19 @@ test('startup recovers from an inherited build temp directory that was removed',
   cleanupHome(subsequent);
 });
 
+test('legacy update build metadata resolves to the original cleanMac folder', (t) => {
+  const root = makeTempDir('legacy-build-info-');
+  t.after(() => cleanupHome(root));
+  const appPath = path.join(root, '.runtime/updates/version-old/source/cleanMac-HEAD/cleanMac.app/Contents/Resources/app');
+  fs.mkdirSync(appPath, { recursive: true });
+  fs.writeFileSync(path.join(appPath, 'build-info.json'), JSON.stringify({ projectRoot: path.dirname(path.dirname(appPath)), updateRoot: path.join(root, '.runtime/updates') }));
+  const original = process.env.TMPDIR;
+  const env = configure({ isPackaged: true, getAppPath: () => appPath, setPath() {}, commandLine: { appendSwitch() {} } });
+  if (original === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = original;
+  t.after(() => cleanupHome(env.sessionDir));
+  assert.equal(env.projectRoot, root);
+});
+
 test('XML plist identity comes only from the root dictionary', () => {
   const xml = `<?xml version="1.0"?><plist version="1.0"><dict>
     <!-- <key>CFBundleIdentifier</key><string>com.fake.comment</string> -->

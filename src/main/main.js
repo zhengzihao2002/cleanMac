@@ -14,7 +14,7 @@ const { scan } = require('./scanner');
 const { CATEGORIES } = require('./categories');
 const { clean } = require('./cleaner');
 const system = require('./system');
-const { prepareUpdate, launchUpdate } = require('./updater');
+const { prepareUpdate, launchUpdate, migrateLegacyUpdate, cleanupUpdateCopies } = require('./updater');
 const { createDeepDelete } = require('./deep-delete');
 
 const isMac = process.platform === 'darwin';
@@ -32,6 +32,7 @@ let scanState = { items: new Map(), controller: null, running: false };
 let cleaning = false;
 let deepBusy = false;
 let updating = false;
+let startupNotice = null;
 
 const guard = createGuard({
   home: env.home,
@@ -81,7 +82,14 @@ function createWindow() {
   });
 
   mainWindow.loadFile(RENDERER, { query: { platform: process.platform } });
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    if (startupNotice) send('app:notice', startupNotice);
+    system.runningApps(env.home, { strict: true }).then((apps) =>
+      cleanupUpdateCopies(app.getAppPath(), apps.map((a) => a.path).filter(Boolean)))
+      .then((count) => { if (count) send('app:notice', `Removed ${count} old cleanMac update folder(s).`); })
+      .catch((error) => send('app:notice', `Old update files were kept: ${error.message}`));
+  });
   mainWindow.on('close', (event) => {
     if (cleaning || updating) {
       event.preventDefault();
@@ -177,6 +185,8 @@ function registerIpc() {
       disk,
       fda: system.hasFullDiskAccess(env.home),
       app: {
+        sourceCommit: (() => { try { return JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'build-info.json'), 'utf8')).sourceCommit || null; } catch { return null; } })(),
+        applicationPath: path.resolve(app.getAppPath(), '../../..'),
         version: app.getVersion(),
         electron: process.versions.electron,
         projectRoot: env.projectRoot,
@@ -338,9 +348,13 @@ function registerIpc() {
     try {
       const result = await prepareUpdate({ projectRoot: env.projectRoot, appPath: app.getAppPath(), currentVersion: app.getVersion(),
         progress: (message) => send('update:progress', message) });
-      if (result.upToDate) return result;
-      send('update:progress', `Opening cleanMac ${result.version}…`);
-      await launchUpdate(result.application);
+      if (result.upToDate) {
+        const apps = await system.runningApps(env.home, { strict: true });
+        const removedCopies = await cleanupUpdateCopies(app.getAppPath(), apps.map((a) => a.path).filter(Boolean));
+        return { ...result, removedCopies };
+      }
+      send('update:progress', `Installing cleanMac ${result.version} at the current app location…`);
+      await launchUpdate(result.application, path.join(env.projectRoot, 'cleanMac.app'));
       updating = false;
       app.quit();
       return { version: result.version };
@@ -363,7 +377,13 @@ app.setAboutPanelOptions({
   copyright: 'Cleanup runs locally. Network access only for requested updates. No tracking.',
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  try {
+    if (await migrateLegacyUpdate(app.getAppPath())) { app.quit(); return; }
+  } catch (error) {
+    // Keep the app available if its original folder is no longer writable.
+    startupNotice = `Could not restore the original app location: ${error.message}`;
+  }
   // No network: cleanMac never talks to the internet.
   session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (_d, cb) =>
     cb({ cancel: true }),

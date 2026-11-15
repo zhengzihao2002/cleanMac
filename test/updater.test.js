@@ -13,6 +13,7 @@ async function fixture(t, { failBuild = false, version = '1.2.0' } = {}) {
   await fs.mkdir(path.join(root, '.runtime'), { recursive: true });
   await fs.writeFile(path.join(root, 'local-edit.txt'), 'keep my edits');
   await fs.writeFile(path.join(root, '.runtime/settings.json'), '{"mode":"trash"}');
+  await fs.writeFile(path.join(root, 'build-info.json'), JSON.stringify({ sourceCommit: 'b'.repeat(40) }));
   const commands = [];
   const execute = async (file, args, options) => {
     commands.push({ file, args, options });
@@ -83,5 +84,13 @@ test('a newer source commit updates even when the package version is unchanged',
 test('failed update checks do not download source or create update folders', async (t) => {
   const f = await fixture(t);
   await assert.rejects(prepareUpdate({ ...f.options, execute: async () => { throw new Error('GitHub unavailable'); } }), /GitHub unavailable/);
+  await assert.rejects(fs.access(path.join(f.root, '.runtime/updates')), { code: 'ENOENT' });
+});
+
+test('unknown installed revisions never trigger an unconditional download and rebuild', async (t) => {
+  const f = await fixture(t);
+  await fs.rm(path.join(f.root, 'build-info.json'));
+  await assert.rejects(prepareUpdate(f.options), /no source revision/);
+  assert.equal(f.commands.length, 0);
   await assert.rejects(fs.access(path.join(f.root, '.runtime/updates')), { code: 'ENOENT' });
 });

@@ -13,15 +13,15 @@ const { pathToFileURL } = require('url');
 async function host(overrides = {}) {
   const handlers = new Map();
   const windows = [];
-  const calls = { cleaned: [], invalidated: 0, relaunched: 0 };
+  const calls = { cleaned: [], invalidated: 0, relaunched: 0, quit: 0, installs: [] };
   const app = new EventEmitter();
   Object.assign(app, {
-    getAppPath: () => '/test/cleanMac',
+    getAppPath: () => '/test/cleanMac.app/Contents/Resources/app',
     getVersion: () => '1.0.0',
     setName() {},
     setAboutPanelOptions() {},
     whenReady: async () => {},
-    quit() {},
+    quit: () => calls.quit++,
     relaunch: () => calls.relaunched++,
     exit() {},
   });
@@ -76,7 +76,9 @@ async function host(overrides = {}) {
       ...overrides.system,
     },
     './deep-delete': { createDeepDelete: () => deep },
-    './updater': { prepareUpdate: async () => ({ application: '/test/update.app', version: '1.1.0' }), launchUpdate: async () => {} },
+    './updater': { prepareUpdate: async () => ({ application: '/test/update.app', version: '1.1.0' }),
+      migrateLegacyUpdate: async () => false, cleanupUpdateCopies: async () => 0,
+      launchUpdate: async (...args) => calls.installs.push(args), ...overrides.updater },
   };
   const filename = path.resolve(__dirname, '../src/main/main.js');
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
@@ -152,4 +154,28 @@ test('cleanup fails closed if running applications cannot be verified', async ()
   await assert.rejects(h.invoke('clean:start', { ids: ['i1'] }), /Process list unavailable/);
   assert.equal(h.calls.cleaned.length, 0);
   await h.invoke('deep:apps');
+});
+
+test('up-to-date updates neither install nor quit the app', async () => {
+  const h = await host({ updater: { prepareUpdate: async () => ({ upToDate: true }) } });
+  assert.equal((await h.invoke('update:start')).upToDate, true);
+  assert.equal(h.calls.installs.length, 0);
+  assert.equal(h.calls.quit, 0);
+});
+
+test('clicking update also cleans local legacy copies when no new build exists', async () => {
+  let cleaned = false;
+  const h = await host({ updater: { prepareUpdate: async () => ({ upToDate: true }),
+    cleanupUpdateCopies: async () => { cleaned = true; return 3; } } });
+  const result = await h.invoke('update:start');
+  assert.equal(cleaned, true);
+  assert.equal(result.removedCopies, 3);
+  assert.equal(h.calls.installs.length, 0);
+});
+
+test('updates target the running app location and quit only after scheduling installation', async () => {
+  const h = await host();
+  await h.invoke('update:start');
+  assert.deepEqual(h.calls.installs[0], ['/test/update.app', '/test/cleanMac/cleanMac.app']);
+  assert.equal(h.calls.quit, 1);
 });

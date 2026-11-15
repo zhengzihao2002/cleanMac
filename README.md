@@ -77,12 +77,15 @@ No account, no `sudo`, nothing installed outside the folder.
 Click **Settings → Check for Updates** to compare the installed build's source commit with this repository's default
 branch on GitHub. Matching commits display **Already up to date** without downloading source, building or relaunching.
 If a new commit exists, cleanMac downloads that exact revision, downloads the build runtime if needed, builds and signs
-a fresh app, and opens it automatically. The current app closes after the new copy opens. No Terminal commands or Git
-installation are needed for updates. Legacy builds without a recorded commit need one update to establish this baseline.
+a fresh app. It quits, replaces `cleanMac.app` in the original project folder, then opens that same app path automatically.
+No Terminal commands or Git installation are needed for updates. Unknown source revisions produce a clear error without
+downloading or rebuilding.
 
-Updates build in separate version folders inside the original project's `.runtime/updates` folder. Keep the original
-folder: it contains the updated apps too. Local source edits and previous app versions are retained, and your cleanup
-preference is copied. Failed downloads/builds leave the current version usable. An older GitHub version is refused.
+Updates build temporarily inside the original project's `.runtime/updates` folder. A rollback copy stays in
+`.runtime/update-backups` during installation. After the updated interface starts successfully, it removes old update
+folders and rollback copies, while preserving any copy still running. Previous updater versions' hidden app copies are
+automatically moved back to the original app location, then cleaned up. Everything stays in the original cleanMac folder;
+local source edits and unrelated files are preserved. Failed installation restores the previous app. An older GitHub version is refused.
 This button downloads the published GitHub source; local changes must be published there before they can be fetched.
 
 Cleanup remains offline. Explicitly requested updates use HTTPS to GitHub and the runtime download hosts; there is no

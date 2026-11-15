@@ -89,6 +89,10 @@ function resolveProjectRoot(app) {
   if (!app.isPackaged) return app.getAppPath();
   try {
     const info = JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'build-info.json'), 'utf8'));
+    if (typeof info.updateRoot === 'string' && path.isAbsolute(info.updateRoot) &&
+        path.basename(info.updateRoot) === 'updates' && path.basename(path.dirname(info.updateRoot)) === '.runtime') {
+      return path.resolve(info.updateRoot, '../..');
+    }
     return typeof info.projectRoot === 'string' && path.isAbsolute(info.projectRoot) ? info.projectRoot : null;
   } catch {
     return null;
