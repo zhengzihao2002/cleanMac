@@ -24,22 +24,35 @@ const SESSION_PREFIX = 'cleanmac-session-';
 
 // One private folder per launch, so a quick relaunch never shares (or has
 // swept away) the folder of the instance that is quitting.
-function sessionDirPath() {
-  return path.join(os.tmpdir(), `${SESSION_PREFIX}${process.pid}`);
+function createSessionDir(tempRoot = os.tmpdir()) {
+  // mkdtemp creates the directory atomically. Reusing a predictable name could
+  // write Chromium data through a directory or symlink left by another process.
+  const root = fs.realpathSync(tempRoot);
+  return fs.mkdtempSync(path.join(root, `${SESSION_PREFIX}${process.pid}-`), { encoding: 'utf8' });
 }
 
 // Remove folders left behind by sessions that did not exit cleanly.
-function removeStaleSessions() {
+function removeStaleSessions(tempRoot = os.tmpdir()) {
   let names = [];
   try {
-    names = fs.readdirSync(os.tmpdir());
+    names = fs.readdirSync(tempRoot);
   } catch {
     return;
   }
   for (const name of names) {
-    if (!name.startsWith(SESSION_PREFIX)) continue;
-    const pid = Number(name.slice(SESSION_PREFIX.length));
-    if (!Number.isInteger(pid) || pid === process.pid) continue;
+    const match = name.match(/^cleanmac-session-([1-9]\d*)(?:-[a-zA-Z0-9]+)?$/);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    if (!Number.isSafeInteger(pid) || pid > 2147483647 || pid === process.pid) continue;
+    const target = path.join(tempRoot, name);
+    let st;
+    try {
+      st = fs.lstatSync(target);
+    } catch {
+      continue;
+    }
+    // Never traverse links or remove a different user's temporary directory.
+    if (!st.isDirectory() || st.isSymbolicLink() || (process.getuid && st.uid !== process.getuid())) continue;
     let alive = false;
     try {
       process.kill(pid, 0);
@@ -49,7 +62,7 @@ function removeStaleSessions() {
     }
     if (!alive) {
       try {
-        fs.rmSync(path.join(os.tmpdir(), name), { recursive: true, force: true });
+        fs.rmSync(target, { recursive: true, force: true });
       } catch {
         /* ignore */
       }
@@ -77,8 +90,7 @@ function resolveProjectRoot(app) {
 function configure(app) {
   const home = os.homedir();
   removeStaleSessions();
-  const sessionDir = sessionDirPath();
-  fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+  const sessionDir = createSessionDir();
 
   // Must happen before the app is ready, so nothing is ever written to the
   // default locations in ~/Library.
@@ -146,4 +158,4 @@ function sweepOnExit(sessionDir) {
   }
 }
 
-module.exports = { configure, readSettings, writeSettings, sweepOnExit, BUNDLE_ID, isPromptingLocation };
+module.exports = { configure, readSettings, writeSettings, sweepOnExit, BUNDLE_ID, isPromptingLocation, createSessionDir, removeStaleSessions };

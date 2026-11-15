@@ -51,6 +51,19 @@ test('admin plan only contains validated system paths', () => {
   assert.deepEqual([...refused.keys()].sort(), ['c', 'e', 'f']);
 });
 
+test('admin plan refuses live logs, unknown operations and entire mixed-validity items', () => {
+  const guard = { check: () => ({ ok: true }) };
+  const { lines, refused } = adminPlan([
+    { id: 'live', action: 'remove', paths: ['/private/var/log/system.log'] },
+    { id: 'directory', action: 'contents', paths: ['/private/var/log/asl'] },
+    { id: 'unknown', action: 'whatever', paths: ['/Library/Caches/com.vendor.app'] },
+    { id: 'mixed', action: 'remove', paths: ['/Library/Logs/old.log', '/Library/Preferences/settings.plist'] },
+    { id: 'traversal', action: 'contents', paths: ['/Library/Caches/vendor/../../Preferences'] },
+  ], guard);
+  assert.deepEqual(lines, []);
+  assert.deepEqual([...refused.keys()].sort(), ['directory', 'live', 'mixed', 'traversal', 'unknown']);
+});
+
 test('plist reader handles XML and binary plists', () => {
   const xml = `<?xml version="1.0"?><plist><dict>
     <key>CFBundleIdentifier</key><string>com.example.app</string>

@@ -187,3 +187,104 @@ test('folders locked by macOS are not offered', async (t) => {
   assert.equal(allItems(result).some((i) => i.location && i.location.endsWith('com.spotify.client')), false);
   assert.ok(byName(result, 'Homebrew downloads'));
 });
+
+test('recursive cleanup leaves a folder containing a protected descendant untouched', async (t) => {
+  const home = makeFakeHome();
+  t.after(() => cleanupHome(home));
+  const root = path.join(home, 'Library/Caches/com.example.updater');
+  const bundle = path.join(root, 'staging/App.app/Contents');
+  fs.mkdirSync(bundle, { recursive: true });
+  fs.writeFileSync(path.join(bundle, 'Info.plist'), '<plist/>');
+  fs.writeFileSync(path.join(root, 'staging/download'), 'keep with protected bundle');
+  const guard = createGuard({ home, platform: 'linux' });
+  const item = { id: 'nested', name: 'Updater', category: 'app-caches', paths: [root], action: 'contents', safety: 'safe', size: null };
+  const report = await clean([item], { mode: 'delete', guard });
+  assert.equal(report[0].ok, false);
+  assert.ok(fs.existsSync(path.join(bundle, 'Info.plist')));
+  assert.ok(fs.existsSync(path.join(root, 'staging/download')));
+});
+
+test('generated app bundles in declared build and browser cache roots remain cleanable', async (t) => {
+  const home = makeFakeHome();
+  t.after(() => cleanupHome(home));
+  const guard = createGuard({ home, platform: 'linux' });
+  for (const rel of ['Library/Developer/Xcode/DerivedData', 'Library/Caches/ms-playwright', 'Library/Caches/Cypress']) {
+    const root = path.join(home, rel);
+    const bundle = path.join(root, 'generated/Test.app/Contents');
+    fs.mkdirSync(bundle, { recursive: true });
+    fs.writeFileSync(path.join(bundle, 'Info.plist'), '<plist/>');
+    const item = { id: rel, name: 'Generated cache', category: 'developer', paths: [root], action: 'contents', safety: 'review', size: null };
+    const report = await clean([item], { mode: 'delete', guard });
+    assert.equal(report[0].ok, true, rel);
+    assert.deepEqual(fs.readdirSync(root), []);
+  }
+});
+
+test('contents cleanup refuses a cache root replaced by a symlink', async (t) => {
+  const home = makeFakeHome();
+  t.after(() => cleanupHome(home));
+  const root = path.join(home, 'Library/Caches/com.example.replaced');
+  fs.symlinkSync(path.join(home, 'Documents'), root);
+  const item = { id: 'link', name: 'Replaced', category: 'app-caches', paths: [root], action: 'contents', safety: 'safe', size: null };
+  const report = await clean([item], { mode: 'delete', guard: createGuard({ home, platform: 'linux' }) });
+  assert.equal(report[0].ok, false);
+  assert.ok(fs.existsSync(path.join(home, 'Documents/important.txt')));
+  assert.ok(fs.lstatSync(root).isSymbolicLink());
+});
+
+test('cleanup never turns an unknown mode into permanent deletion', async (t) => {
+  const home = makeFakeHome();
+  t.after(() => cleanupHome(home));
+  const { items, guard } = await runScan(home);
+  const item = [...items.values()].find((i) => i.name === 'Spotify');
+  await assert.rejects(clean([item], { mode: 'trahs', guard }), /Invalid cleanup mode/);
+  assert.ok(fs.existsSync(path.join(item.paths[0], 'Data/chunk1')));
+});
+
+test('cleanup rechecks app ownership after scanning and leaves open-app files alone', async (t) => {
+  const home = makeFakeHome();
+  t.after(() => cleanupHome(home));
+  const { items, guard } = await runScan(home);
+  const item = [...items.values()].find((i) => i.name === 'Spotify');
+  assert.equal(item.running, null);
+  const running = require('../src/main/system').createRunningIndex([{ bundleId: 'com.spotify.client', name: 'Spotify' }]);
+  const report = await clean([item], { mode: 'delete', guard, running });
+  assert.equal(report[0].ok, false);
+  assert.match(report[0].errors[0], /Quit Spotify/);
+  assert.ok(fs.existsSync(path.join(item.paths[0], 'Data/chunk1')));
+});
+
+test('cleanup leaves a replaced scan root alone even when the replacement is allow-listed', async (t) => {
+  const home = makeFakeHome();
+  t.after(() => cleanupHome(home));
+  const { items, guard } = await runScan(home);
+  const item = [...items.values()].find((i) => i.name === 'Spotify');
+  const root = item.paths[0];
+  const st = fs.lstatSync(root);
+  item.identities = [{ dev: st.dev, ino: st.ino, mode: st.mode }];
+  fs.renameSync(root, root + '.old');
+  fs.mkdirSync(root);
+  fs.writeFileSync(path.join(root, 'new-data'), 'must survive stale preview');
+  const report = await clean([item], { mode: 'delete', guard });
+  assert.equal(report[0].ok, false);
+  assert.match(report[0].errors[0], /location changed/);
+  assert.ok(fs.existsSync(path.join(root, 'new-data')));
+});
+
+test('scan capabilities remain valid administrator plan identifiers', async (t) => {
+  const home = makeFakeHome();
+  t.after(() => cleanupHome(home));
+  const { items } = await scan({
+    home,
+    guard: createGuard({ home, platform: 'linux' }),
+    context: fakeContext(home),
+    categories: [{ id: 'snapshots', collect: async () => ({ items: [{
+      name: 'Snapshot', paths: [], action: 'snapshot', safety: 'review',
+      admin: true, unsized: true, meta: { date: '2026-11-15-120000' },
+    }] }) }],
+  });
+  const { lines, refused } = require('../src/main/cleaner').adminPlan([...items.values()], { check: () => ({ ok: true }) });
+  assert.equal(refused.size, 0);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0], `${[...items.keys()][0]}\tsnapshot\t2026-11-15-120000`);
+});

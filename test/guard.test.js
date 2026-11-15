@@ -87,3 +87,27 @@ test('guard rejects an invalid home', () => {
   assert.throws(() => createGuard({ home: '/' }));
   assert.throws(() => createGuard({ home: 'relative' }));
 });
+
+test('guard rejects case-only symlink aliases on case-sensitive volumes', (t) => {
+  const home = makeFakeHome();
+  t.after(() => cleanupHome(home));
+  const root = path.join(home, 'Library/Caches');
+  fs.mkdirSync(path.join(root, 'COM.EXAMPLE.ALIAS'));
+  if (fs.existsSync(path.join(root, 'com.example.alias'))) {
+    t.skip('Requires a case-sensitive filesystem');
+    return;
+  }
+  fs.symlinkSync(path.join(root, 'COM.EXAMPLE.ALIAS'), path.join(root, 'com.example.alias'));
+  const g = createGuard({ home, platform: 'darwin' });
+  assert.equal(g.check(path.join(root, 'com.example.alias/entry')).ok, false);
+});
+
+test('guard protects cleanMac paths regardless of macOS case aliases', (t) => {
+  const home = makeFakeHome();
+  t.after(() => cleanupHome(home));
+  const root = path.join(home, 'Library/Caches/com.example.own');
+  fs.mkdirSync(root);
+  const g = createGuard({ home, platform: 'darwin', ownPaths: [root.toUpperCase()] });
+  assert.equal(g.check(root).ok, false);
+  assert.match(g.check(root).reason, /cleanMac/);
+});

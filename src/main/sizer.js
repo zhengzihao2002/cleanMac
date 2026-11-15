@@ -18,7 +18,8 @@ function duBytes(target, { signal, timeout = 180000 } = {}) {
       const out = String(stdout || '').trim().split('\n').pop() || '';
       const m = out.match(/^(\d+)\s/);
       if (m) {
-        const partial = /Permission denied|Operation not permitted/i.test(String(stderr || ''));
+        // du can print a subtotal even when interrupted, timed out or blocked.
+        const partial = !!err || /Permission denied|Operation not permitted/i.test(String(stderr || ''));
         resolve({ bytes: Number(m[1]) * 1024, partial });
       } else if (err && (err.code === 'ENOENT' || err.code === 'EACCES')) {
         resolve(null);
@@ -36,7 +37,10 @@ async function walkBytes(target, signal) {
   const seen = new Set();
   const stack = [target];
   while (stack.length) {
-    if (signal && signal.aborted) break;
+    if (signal && signal.aborted) {
+      partial = true;
+      break;
+    }
     const p = stack.pop();
     let st;
     try {
@@ -48,7 +52,8 @@ async function walkBytes(target, signal) {
     const key = `${st.dev}:${st.ino}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    bytes += (st.blocks || 0) * 512 || st.size;
+    // A sparse file may have a large logical size and zero allocated blocks.
+    bytes += Number.isFinite(st.blocks) ? st.blocks * 512 : st.size;
     if (st.isDirectory()) {
       try {
         for (const name of await fsp.readdir(p)) stack.push(path.join(p, name));

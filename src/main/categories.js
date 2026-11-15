@@ -52,7 +52,8 @@ async function collectAppCaches(ctx) {
     if (!e.isDirectory() || !safeName(e.name) || R.HIDDEN_CACHES.has(e.name)) continue;
     const name = R.friendlyName(e.name, ctx.appNames);
     const { safety, note } = R.cacheSafety(e.name);
-    const running = ctx.running.match({ bundleIds: [e.name], names: [name, ...(RUNNING_HINTS[e.name] || [])] });
+    const runningHints = { bundleIds: [e.name], names: [name, ...(RUNNING_HINTS[e.name] || [])] };
+    const running = ctx.running.match(runningHints);
     items.push({
       name,
       detail: null,
@@ -62,6 +63,7 @@ async function collectAppCaches(ctx) {
       safety,
       note: note || `Temporary files ${name} keeps to work faster. It rebuilds them automatically when needed.`,
       running,
+      runningHints,
     });
   }
   return { items };
@@ -99,7 +101,8 @@ async function collectWebCaches(ctx) {
     const key = `${owner.key}|${spec.safety}`;
     let g = groups.get(key);
     if (!g) {
-      const running = ctx.running.match({ names: [owner.name, ...owner.hints] });
+      const runningHints = { names: [owner.name, ...owner.hints] };
+      const running = ctx.running.match(runningHints);
       g = {
         name: owner.name,
         labels: new Set(),
@@ -109,6 +112,7 @@ async function collectWebCaches(ctx) {
         safety: spec.safety,
         note: spec.note || `Caches ${owner.name} rebuilds automatically: downloaded web content, compiled scripts and GPU shaders.`,
         running,
+        runningHints,
       };
       groups.set(key, g);
     }
@@ -184,6 +188,7 @@ async function collectLogs(ctx) {
     const full = path.join(root, e.name);
     if (e.isDirectory()) {
       const name = LOG_NAMES[e.name] || R.friendlyName(e.name, ctx.appNames);
+      const runningHints = { bundleIds: [e.name], names: [name, ...(RUNNING_HINTS[e.name] || [])] };
       items.push({
         name,
         detail: null,
@@ -194,7 +199,8 @@ async function collectLogs(ctx) {
         note: e.name === 'DiagnosticReports'
           ? 'Reports written when an app crashes or hangs. Useful only if you are debugging a problem.'
           : `Diagnostic logs written by ${name}. Apps do not need old logs to work.`,
-        running: null,
+        running: ctx.running.match(runningHints),
+        runningHints,
       });
     } else if (e.isFile()) {
       loose.push(full);
@@ -231,6 +237,7 @@ async function collectDeveloper(ctx) {
       safety: t.safety,
       note: t.note,
       running: t.running ? ctx.running.match({ bundleIds: t.running }) : null,
+      runningHints: t.running ? { bundleIds: t.running } : null,
     });
   }
   return { items };
@@ -258,6 +265,7 @@ async function collectContainers(ctx) {
       safety,
       note: note || `Cache of the sandboxed app ${name}. Rebuilt automatically.`,
       running: ctx.running.match({ bundleIds: [e.name], names: [name] }),
+      runningHints: { bundleIds: [e.name], names: [name] },
     });
   }
 
@@ -269,9 +277,10 @@ async function collectContainers(ctx) {
       location: mail,
       paths: [mail],
       action: 'contents',
-      safety: 'safe',
-      note: 'Copies of attachments you opened from Mail. The originals stay in your mailbox.',
+      safety: 'review',
+      note: 'Copies of attachments you opened from Mail. Edited copies may contain changes that are not saved in the original message. Keep any changes you need before removing these files.',
       running: ctx.running.match({ bundleIds: ['com.apple.mail'] }),
+      runningHints: { bundleIds: ['com.apple.mail'] },
     });
   }
 
@@ -292,6 +301,7 @@ async function collectContainers(ctx) {
       safety,
       note: note || `Cache shared by ${name} and its extensions. Rebuilt automatically.`,
       running: ctx.running.match({ bundleIds: [bare], names: [name] }),
+      runningHints: { bundleIds: [bare], names: [name] },
     });
   }
   return { items };
@@ -388,7 +398,8 @@ async function collectSystem(ctx) {
       note: apple
         ? 'A system-wide cache macOS rebuilds by itself. Some changes only take effect after a restart.'
         : 'A system-wide cache. Rebuilt automatically by the app that created it.',
-      running: null,
+      running: ctx.running.match({ bundleIds: [e.name], names: [R.friendlyName(e.name, ctx.appNames)] }),
+      runningHints: { bundleIds: [e.name], names: [R.friendlyName(e.name, ctx.appNames)] },
       admin: true,
     });
   }

@@ -5,7 +5,7 @@
 <h1 align="center">cleanMac</h1>
 
 <p align="center">
-  Safely reclaim the space macOS calls <b>“System Data”</b> — app caches, logs, browser caches and developer leftovers.<br>
+  Review the space macOS calls <b>“System Data”</b> — app caches, logs, browser caches and developer leftovers — and uninstall apps with Deep Delete.<br>
   Built on your own Mac, runs offline, and leaves no trace when you delete it.
 </p>
 
@@ -72,8 +72,22 @@ No account, no `sudo`, nothing installed outside the folder.
 
 ## What it cleans
 
-cleanMac only ever looks at a **fixed list of locations**. Everything else — your documents, photos, mail, passwords,
-app settings — is never scanned, let alone removed.
+### Updating from Settings
+
+Click **Settings → Download & Rebuild Update** to fetch this repository's default branch from GitHub, download
+the build runtime if needed, build and sign a fresh app, and open it automatically. The current app closes after
+the new copy opens. No Terminal commands or Git installation are needed for updates.
+
+Updates build in separate version folders inside the original project's `.runtime/updates` folder. Keep the original
+folder: it contains the updated apps too. Local source edits and previous app versions are retained, and your cleanup
+preference is copied. Failed downloads/builds leave the current version usable. An older GitHub version is refused.
+This button downloads the published GitHub source; local changes must be published there before they can be fetched.
+
+Cleanup remains offline. Explicitly requested updates use HTTPS to GitHub and the runtime download hosts; there is no
+background update polling or tracking. The interface itself still blocks network requests.
+
+**Smart Scan** only looks at a **fixed list of locations**. Your documents, photos, mail, passwords and app settings
+are excluded from that cleanup. **Deep Delete** is a separate, explicit app-uninstall workflow described below.
 
 | Category | Where | Notes |
 | --- | --- | --- |
@@ -98,7 +112,33 @@ Every item gets one of three ratings, and the reason is one click away (ⓘ) in 
 - 🔒 **Protected** — part of System Data that is your data or that macOS needs while running. Listed so you know where
   the space goes; cleanMac refuses to remove it.
 
-Items owned by an app that is **currently running** are marked *Open* and not selected — quit the app first.
+Items owned by an app that is **currently running** are marked *Open* and not selected. Cleanup checks running apps
+again and skips their files — quit the owning app before retrying.
+
+### Deep Delete
+
+Open **Deep Delete** in the sidebar, choose an installed application, then review its application bundle and the related
+files found in known Library locations. Only the app bundle is selected initially. Caches, logs, preferences,
+application support data, saved state, web data and sandbox containers must each be selected explicitly: they may
+contain settings, sign-ins or saved work. You can reveal individual items in Finder and refresh the preview.
+
+Deep Delete matches **exact bundle identifiers**, including well-formed device-specific preference names, plus an
+explicit list of app-specific support folders for Chrome, Edge, Brave, Slack, Discord and Visual Studio Code. For example,
+Chrome can include `~/Library/Application Support/Google/Chrome`, while leaving sibling Google folders alone. These
+support folders also start unchecked. It does not guess based on an app's display name or delete a vendor's entire folder.
+Apple/system apps and cleanMac itself are
+protected. Shared Group Containers, privileged helpers, launch agents and personal folders outside the app's private
+data are excluded. If another discovered installed copy uses the same identifier, related data is excluded to protect it.
+
+Before each move, cleanMac checks the app's identity, selected file identity, symlink ancestry and running processes
+again. Changed files are left in place. Incomplete previews cannot be selected. If a selected related file fails,
+the app stays installed so you can resolve the problem and retry. Permission failures are reported without escalating
+Deep Delete to administrator access.
+
+**Deep Delete always moves files to Trash**, regardless of the Smart Scan setting. Review the result and empty Trash
+yourself when ready; until then, you can restore the moved files. Moving files to Trash does not itself free disk space.
+Apps can write data anywhere, and macOS snapshots or shared files can retain space, so this feature cannot guarantee
+the exact free-space figure you had before installing an app.
 
 ### Defence in depth
 
@@ -108,9 +148,14 @@ Deleting the wrong thing is the one mistake a cleaner must never make, so safety
 2. **Signature checks.** A folder named `Cache` inside Application Support is only offered if it contains Chromium’s
    cache files (`Cache_Data`, `index`, `js/`…).
 3. **The interface never names paths.** It can only send the ids of items the scanner produced.
-4. **An independent deletion guard** (`src/main/guard.js`) re-checks every single path right before removal: it must
+4. **An independent Smart Scan deletion guard** (`src/main/guard.js`) re-checks every single path right before removal: it must
    match the allow-list, must not match the deny-list (Keychains, Preferences, Mail, Messages, iCloud Drive, Photos,
-   app bundles, `/System`, …), must not travel through a symbolic link, and must not belong to cleanMac itself.
+   installed app bundles, `/System`, …), must not travel through a symbolic link, and must not belong to cleanMac itself.
+   Rebuildable app bundles inside explicitly declared Xcode build/preview locations and Playwright/Cypress browser
+   caches remain cleanable; unrelated updater bundles are protected.
+   Directory contents are checked recursively so a protected descendant cannot be removed through its parent.
+   Scans retain root file identities; a replaced root is skipped. Deep Delete has a separate narrow app-uninstall
+   allow-list and private preview identifiers in `src/main/deep-delete.js`.
 5. **Contents, not folders.** Cache folders are emptied, not deleted, so apps find them where they expect them.
 6. **Trash by default.** Files go to the Trash (with *Put Back*) unless you choose *Delete immediately*.
 7. **System items** are removed by a tiny shell script (`src/main/admin-helper.sh`) that runs only after you approve
@@ -140,7 +185,7 @@ While it runs, Electron’s working data (normally kept in `~/Library/Applicatio
 temporary folder that is **erased after the app quits**. cleanMac also:
 
 - uses a mock keychain, so no “cleanMac Safe Storage” keychain item is created,
-- blocks all network requests (it never needs the internet),
+- blocks all network requests from the interface (the Settings updater explicitly downloads source and runtime through macOS tools),
 - after quitting, sweeps the few files macOS creates for *any* app (saved window state, preference domain, per-app
   system caches).
 
@@ -167,6 +212,7 @@ cleanMac/
 │   │   ├── scanner.js     #   runs collectors, measures sizes
 │   │   ├── guard.js       #   independent deletion allow/deny-list
 │   │   ├── cleaner.js     #   removal (Trash / delete / admin)
+│   │   ├── deep-delete.js #   app discovery, exact-match previews and Trash-only uninstall
 │   │   ├── admin-helper.sh#   root helper for system items
 │   │   ├── system.js      #   disk, permissions, installed & running apps
 │   │   ├── sizer.js       #   disk usage via du

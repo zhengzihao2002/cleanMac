@@ -111,8 +111,9 @@ async function installedApps(home) {
  * inside an .app bundle (including helper processes) is attributed to the
  * outermost bundle, whose Info.plist gives us the bundle id.
  */
-async function runningApps(home = os.homedir()) {
+async function runningApps(home = os.homedir(), { strict = false } = {}) {
   const r = await run('/bin/ps', ['-axww', '-o', 'comm=']);
+  if (!r.ok && strict) throw new Error('Could not verify running applications. Try again before removing an app.');
   if (!r.ok && !r.stdout) return [];
   const bundles = new Set();
   for (const line of r.stdout.split('\n')) {

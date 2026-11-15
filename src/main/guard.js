@@ -16,6 +16,17 @@ const { CHROMIUM_CACHE_DIRS, VSCODE_LIKE, VSCODE_DIRS, DEVELOPER_TARGETS } = req
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const SEG = '[^/]+';
 
+// These exact locations contain generated builds or downloaded test browsers.
+// Bundles elsewhere (including updater staging caches) stay protected.
+const GENERATED_BUNDLE_ROOTS = [
+  'Library/Developer/Xcode/DerivedData',
+  'Library/Developer/Xcode/Products',
+  'Library/Developer/Xcode/UserData/Previews',
+  'Library/Developer/XCTestDevices',
+  'Library/Caches/ms-playwright',
+  'Library/Caches/Cypress',
+];
+
 const DENY = [
   /\/Library\/Keychains(\/|$)/,
   /\/Library\/Preferences(\/|$)/,
@@ -61,9 +72,13 @@ function buildAllowList(home) {
     // System-wide (administrator) areas.
     `/Library/Caches/${SEG}`,
     `/Library/Logs/${SEG}`,
-    `/private/var/log/${SEG}`,
   ];
-  return patterns.map((p) => new RegExp(`^${p}(?:/.*)?$`));
+  return [
+    ...patterns.map((p) => new RegExp(`^${p}(?:/.*)?$`)),
+    // Only archived logs, at the depths the collector understands. Never
+    // authorize a live log or an entire /var/log directory for removal.
+    /^\/private\/var\/log\/(?:[^/]+\/)?[^/]+\.(?:gz|bz2|xz|zip|\d+)$/i,
+  ];
 }
 
 function createGuard({ home, ownPaths = [], platform = process.platform }) {
@@ -74,6 +89,9 @@ function createGuard({ home, ownPaths = [], platform = process.platform }) {
   const allow = buildAllowList(home);
   const own = ownPaths.filter(Boolean).map((p) => path.normalize(p).replace(/\/+$/, ''));
   const caseInsensitive = platform === 'darwin';
+  const key = (p) => caseInsensitive ? p.toLowerCase() : p;
+  const protectedPatterns = caseInsensitive ? DENY.map((re) => new RegExp(re.source, 'i')) : DENY;
+  const generatedBundleRoots = GENERATED_BUNDLE_ROOTS.map((rel) => path.join(home, rel));
 
   function verdict(ok, reason) {
     return { ok, reason };
@@ -86,26 +104,28 @@ function createGuard({ home, ownPaths = [], platform = process.platform }) {
   function check(target) {
     if (typeof target !== 'string' || target.length === 0) return verdict(false, 'Invalid path');
     if (!path.isAbsolute(target)) return verdict(false, 'Not an absolute path');
-    if (/[\0\n\r\t]/.test(target)) return verdict(false, 'Unsupported characters in path');
+    if (/[\x00-\x1f\x7f]/.test(target)) return verdict(false, 'Unsupported characters in path');
     if (path.normalize(target) !== target || target.endsWith('/')) return verdict(false, 'Path is not normalized');
     if (target === home || home.startsWith(target + '/')) return verdict(false, 'Refusing to touch the home folder');
 
     for (const p of own) {
-      if (target === p || target.startsWith(p + '/') || p.startsWith(target + '/')) {
+      if (key(target) === key(p) || key(target).startsWith(key(p) + '/') || key(p).startsWith(key(target) + '/')) {
         return verdict(false, 'Belongs to cleanMac itself');
       }
     }
-    for (const re of DENY) {
+    for (const re of protectedPatterns) {
       if (re.test(target)) return verdict(false, 'Protected location');
     }
     if (!allow.some((re) => re.test(target))) return verdict(false, 'Outside the areas cleanMac cleans');
 
-    // Refuse anything inside a real application bundle (Foo.app/Contents/...).
+    // Refuse real application bundles except generated build products and
+    // downloaded test browsers in the exact locations declared above.
     const parts = target.split('/');
     for (let i = 1; i < parts.length; i++) {
       if (/\.app$/i.test(parts[i])) {
         const bundle = parts.slice(0, i + 1).join('/');
-        if (fs.existsSync(path.join(bundle, 'Contents', 'Info.plist'))) {
+        const generated = generatedBundleRoots.some((root) => bundle.startsWith(root + '/'));
+        if (!generated && fs.existsSync(path.join(bundle, 'Contents', 'Info.plist'))) {
           return verdict(false, 'Inside an application bundle');
         }
       }
@@ -114,14 +134,17 @@ function createGuard({ home, ownPaths = [], platform = process.platform }) {
     // Refuse paths that travel through a symbolic link (e.g. a cache folder
     // that actually points at an external drive or at your documents).
     const parent = path.dirname(target);
-    let real;
     try {
-      real = fs.realpathSync.native(parent);
+      let current = path.parse(parent).root;
+      for (const part of parent.slice(current.length).split('/').filter(Boolean)) {
+        current = path.join(current, part);
+        const st = fs.lstatSync(current);
+        if (st.isSymbolicLink()) return verdict(false, 'Path goes through a symbolic link');
+        if (!st.isDirectory()) return verdict(false, 'Parent is not a folder');
+      }
     } catch {
       return verdict(false, 'Location no longer exists');
     }
-    const same = caseInsensitive ? real.toLowerCase() === parent.toLowerCase() : real === parent;
-    if (!same) return verdict(false, 'Path goes through a symbolic link');
 
     return verdict(true, null);
   }

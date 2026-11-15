@@ -1,8 +1,8 @@
 {
   "name": "cleanmac",
   "productName": "cleanMac",
-  "version": "1.0.0",
-  "description": "Safely reclaim macOS \"System Data\": app caches, logs and developer leftovers.",
+  "version": "1.1.0",
+  "description": "Review macOS storage, clean caches and uninstall apps with Deep Delete.",
   "main": "src/main/main.js",
   "private": true,
   "license": "MIT",

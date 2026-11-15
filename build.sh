@@ -191,6 +191,7 @@ json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 cat >"$APP_DIR/build-info.json" <<EOF
 {
   "projectRoot": "$(json_escape "$ROOT")",
+  "updateRoot": "$(json_escape "${CLEANMAC_UPDATE_ROOT:-$ROOT/.runtime/updates}")",
   "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "electron": "$ELECTRON_VERSION",
   "arch": "$ARCH"

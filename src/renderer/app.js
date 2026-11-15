@@ -23,9 +23,10 @@
   const S = {
     sys: null,
     settings: { mode: 'trash' },
+    update: { busy: false, message: '' },
     meta: [], // category metadata (before a scan)
     phase: 'idle', // idle | scanning | results | cleaning | done
-    view: 'home', // home | cat:<id> | settings
+    view: 'home', // home | cat:<id> | settings | deep-delete
     scan: null,
     progress: { status: {}, sizes: {}, counts: {}, found: 0, path: '' },
     selected: new Set(),
@@ -34,8 +35,11 @@
     clean: { done: 0, total: 0, current: '' },
     cleanResult: null,
     animatedTotal: false,
+    deep: { loaded: false, apps: [], errors: [], filter: '', status: 'idle', preview: null, selected: new Set(), result: null, error: '', progress: null },
   };
   const byId = new Map();
+  let modalFocus = null;
+  const deepBusy = () => ['loading', 'previewing', 'removing'].includes(S.deep.status);
 
   /* ============================================================== helpers */
 
@@ -202,6 +206,11 @@
           <span class="nav-label">Smart Scan</span>
           <span class="nav-meta">${results && S.scan ? esc(fmt(t.total)) : ''}</span>
         </button>
+        <button class="nav-item ${S.view === 'deep-delete' ? 'active' : ''}" data-nav="deep-delete" ${S.phase === 'scanning' || S.phase === 'cleaning' || S.deep.status === 'removing' ? 'disabled' : ''}>
+          <span class="nav-icon deep">${icon('box', 14)}</span>
+          <span class="nav-label">Deep Delete</span>
+          <span class="nav-meta">${icon('chevronRight', 12)}</span>
+        </button>
         <div class="nav-heading">Categories</div>
         ${catItems}
       </nav>
@@ -225,7 +234,7 @@
 
   function renderToolbar() {
     let left = '';
-    if (S.view.startsWith('cat:') || S.view === 'settings') {
+    if (S.view.startsWith('cat:') || S.view === 'settings' || S.view === 'deep-delete') {
       left = `<button class="btn btn-ghost btn-sm" data-nav="home">${icon('chevronLeft', 15)}Overview</button>`;
     }
     const fda = S.sys && S.sys.fda;
@@ -233,8 +242,9 @@
       S.sys && S.sys.platform === 'darwin'
         ? `<button class="chip ${fda ? 'safe' : 'review'}" data-nav="settings" title="Full Disk Access">${icon(fda ? 'shield' : 'lock', 12)}${fda ? 'Full Disk Access' : 'Limited access'}</button>`
         : '';
-    const rescan =
-      S.phase === 'results' || S.phase === 'done'
+    const rescan = S.view === 'deep-delete'
+      ? `<button class="btn btn-ghost btn-sm" data-action="deep-refresh" ${deepBusy() ? 'disabled' : ''}>${icon('refresh', 15)}Refresh Apps</button>`
+      : S.phase === 'results' || S.phase === 'done'
         ? `<button class="btn btn-ghost btn-sm" data-action="scan">${icon('refresh', 15)}Scan Again</button>`
         : S.phase === 'scanning'
           ? `<button class="btn btn-ghost btn-sm" data-action="cancel-scan">${icon('x', 15)}Stop Scan</button>`
@@ -278,7 +288,7 @@
         <div class="gauge-center"><div class="gauge-value">${disk ? esc(fmt(disk.free)) : '—'}</div><div class="gauge-label">available</div></div>
       </div>
       <h1 class="hero-title">Reclaim your <span class="grad-text">System Data</span></h1>
-      <p class="hero-sub">cleanMac looks through the hidden parts of your Mac — caches, logs and leftovers — and only removes what macOS and your apps rebuild on their own.</p>
+      <p class="hero-sub">Find caches, logs and leftovers in the hidden parts of your Mac. Review what is removable, understand the side effects, and keep important files protected.</p>
       <button class="btn btn-primary btn-xl" data-action="scan">${icon('sparkles', 19)}Start Scan</button>
       <div class="assure">
         <div class="assure-item">${icon('shield', 20)}<div><b>Safety first</b><span>Every item is rated Safe, Review or Protected.</span></div></div>
@@ -409,7 +419,7 @@
     const exp = S.expanded.has(it.id);
     const sizeText = it.size == null ? '—' : fmt(it.size) + (it.partial ? '+' : '');
     const sizeTitle = it.size == null ? 'macOS does not report this size' : it.partial ? 'At least this much. Some files can only be measured with administrator rights.' : '';
-    const runningNote = it.running ? `<br><b>${esc(it.running)}</b> is open right now — quit it before cleaning for the best result.` : '';
+    const runningNote = it.running ? `<br><b>${esc(it.running)}</b> is open right now. Quit it before cleaning; files belonging to open apps will be skipped.` : '';
     const adminNote = it.admin ? '<br>Needs your administrator password, and is deleted directly instead of going to the Trash.' : '';
     const where = it.location ? `<span class="path">${esc(it.location)}${it.count > 1 ? ` · ${it.count} folders` : ''}</span>` : '';
     const check = it.selectable
@@ -522,6 +532,7 @@
     const cleanedCount = r.report.filter((x) => x.ok || x.partial).length;
     const big = bytesParts(freed);
     const trash = r.mode === 'trash' && r.report.some((x) => !x.admin && (x.ok || x.partial));
+    const mixed = trash && r.report.some((x) => x.admin && (x.ok || x.partial));
     const diskLine =
       r.diskBefore && r.diskAfter
         ? `<div class="done-stat"><b>${esc(fmt(r.diskBefore.free))} → ${esc(fmt(r.diskAfter.free))}</b><span>Free space</span></div>`
@@ -533,11 +544,11 @@
     return `<div class="hero fade-in">
       <div class="done-badge ${failed.length && !cleanedCount ? 'partial' : ''}">${icon(failed.length && !cleanedCount ? 'warning' : 'check')}</div>
       <div class="big-number"><span class="grad-text">${esc(big.value)}</span><span class="unit">${esc(big.unit)}</span></div>
-      <h2 class="hero-title sm">${trash ? 'moved to the Trash' : 'cleaned up'}</h2>
+      <h2 class="hero-title sm">${mixed ? 'removed from selected locations' : trash ? 'moved to the Trash' : 'cleaned up'}</h2>
       <p class="hero-sub" style="margin-bottom:0">${
         trash
-          ? 'Everything can be put back from the Trash. Empty the Trash when you are happy to get the space back.'
-          : 'The space is free right away.'
+          ? `${mixed ? 'System items were deleted directly. Other files ' : 'Files '}can be restored from the Trash until you empty it. Empty the Trash when you are ready to reclaim that space.`
+          : 'The selected files were removed. Available disk space is measured below; snapshots and other disk activity can affect it.'
       }</p>
       <div class="done-stats">
         <div class="done-stat"><b>${plural(cleanedCount, 'item')}</b><span>Cleaned</span></div>
@@ -557,8 +568,77 @@
       <button class="${current === 'trash' ? 'on' : ''}" data-action="set-mode" data-mode="trash" role="radio" aria-checked="${current === 'trash'}">
         <b>${icon('trash', 15)}Move to Trash</b><span>Recoverable until you empty the Trash</span></button>
       <button class="${current === 'delete' ? 'on' : ''}" data-action="set-mode" data-mode="delete" role="radio" aria-checked="${current === 'delete'}">
-        <b>${icon('x', 15)}Delete immediately</b><span>Frees the space right away</span></button>
+        <b>${icon('x', 15)}Delete immediately</b><span>Permanently removes selected files</span></button>
     </div>`;
+  }
+
+  function deepAppList() {
+    const query = S.deep.filter.trim().toLowerCase();
+    const apps = S.deep.apps.filter((a) => `${a.name} ${a.bundleId} ${a.path}`.toLowerCase().includes(query));
+    return apps.length ? `<div class="deep-app-grid">${apps.map((a) => `<button class="deep-app ${a.protected ? 'is-protected' : ''}" data-action="deep-preview" data-id="${esc(a.id)}" ${a.protected ? 'disabled' : ''} aria-label="${esc(a.protected ? a.name + ': ' + a.reason : 'Review ' + a.name)}">
+      <span class="avatar" style="--h:${hue(a.name)}">${esc(initial(a.name))}</span>
+      <span class="deep-app-body"><b>${esc(a.name)}</b><span class="deep-app-id">${esc(a.bundleId)}</span><span class="deep-app-path">${esc(a.path)}</span>${a.protected ? `<span class="deep-app-reason">${icon('lock', 12)}${esc(a.reason || 'Protected application')}</span>` : a.running ? `<span class="deep-app-reason">${icon('running', 12)}Open · quit before removal</span>` : ''}</span>
+      ${icon(a.protected ? 'lock' : 'chevronRight', 16)}
+    </button>`).join('')}</div>` : `<div class="empty">${icon('search', 28)}<b>${query ? 'No matching apps' : 'No applications found'}</b>${query ? 'Try an app name or bundle identifier.' : 'Apps in Applications and your personal Applications folder appear here.'}</div>`;
+  }
+
+  function deepSelectedItems() {
+    return (S.deep.preview?.items || []).filter((i) => i.selectable !== false && S.deep.selected.has(i.id));
+  }
+
+  function invalidateDeepPreview() {
+    S.deep.loaded = false;
+    S.deep.apps = [];
+    S.deep.errors = [];
+    S.deep.preview = null;
+    S.deep.selected.clear();
+    S.deep.result = null;
+    S.deep.error = '';
+  }
+
+  function deepItemHtml(it) {
+    const selected = S.deep.selected.has(it.id);
+    const isApp = it.kind === 'application';
+    return `<div class="deep-file ${selected ? 'selected' : ''}" data-deep-row="${esc(it.id)}">
+      <button class="check ${selected ? 'on' : ''}" role="checkbox" aria-checked="${selected}" aria-label="${esc('Remove ' + it.name + ': ' + it.path)}" data-action="deep-toggle" data-id="${esc(it.id)}" ${it.selectable === false ? 'disabled' : ''}>${icon(it.selectable === false ? 'lock' : 'check', 14)}</button>
+      <div class="deep-file-body"><div class="row-title"><b>${esc(it.name)}</b><span class="chip ${isApp ? 'neutral' : 'review'}">${isApp ? 'Application' : 'Review'}</span></div>
+        <div class="deep-path">${esc(it.path || it.location)}</div><p>${esc(it.note || (isApp ? 'The installed app bundle.' : 'App-related files. Review before including; these may contain settings or local data.'))}</p>
+      </div>
+      <div class="deep-file-end"><b>${esc(fmt(it.size))}${it.partial ? '+' : ''}</b><button class="icon-btn" data-action="deep-reveal" data-id="${esc(it.id)}" aria-label="${esc('Show ' + it.name + ' in Finder')}" title="Show in Finder">${icon('folder', 16)}</button></div>
+    </div>`;
+  }
+
+  function viewDeepDelete() {
+    const d = S.deep;
+    const head = `<header class="deep-header"><span class="cat-icon lg deep">${icon('box', 26)}</span><div><div class="eyebrow">APP UNINSTALLER</div><h1>Deep Delete</h1><p>Remove an app and review the files it leaves behind.</p></div><span class="chip safe">${icon('trash', 13)}Trash only</span></header>`;
+    if (deepBusy()) {
+      return `<div class="fade-in">${head}<div class="deep-loading" role="status"><span class="spinner"></span><h2>${d.status === 'loading' ? 'Finding installed apps…' : d.status === 'previewing' ? 'Finding app-related files…' : 'Moving reviewed files to the Trash…'}</h2><p>${d.status === 'removing' ? 'Each path is checked again before removal. Files macOS protects stay in place.' : 'Looking only in known app locations. Your documents and shared system files stay protected.'}</p><div id="deep-progress" class="deep-footnote">${d.progress ? esc(`${d.progress.done} of ${d.progress.total} · ${d.progress.current || ''}`) : ''}</div></div></div>`;
+    }
+    if (d.result) {
+      const r = d.result;
+      const succeeded = r.report.filter((x) => x.ok);
+      const failed = r.report.filter((x) => !x.ok);
+      return `<div class="fade-in">${head}<section class="panel deep-result" role="status"><span class="deep-result-icon ${failed.length ? 'has-errors' : ''}">${icon(failed.length ? 'warning' : 'check', 30)}</span><h2>${failed.length ? succeeded.length ? 'Some files need another look' : 'Files were left in place' : 'Moved to the Trash'}</h2><p><b>${esc(fmt(r.trashedBytes || 0))}</b> moved to the Trash from ${plural(succeeded.length, 'item')}. ${r.appRemoved ? 'The application was removed.' : 'The application has not been removed.'}</p><p>Space becomes available after you empty the Trash. You can restore the selected files from the Trash until then.</p>${r.diskAfter ? `<div class="deep-disk">${icon('disk', 16)}${esc(fmt(r.diskAfter.free))} available now</div>` : ''}<div class="btn-row"><button class="btn btn-secondary" data-action="open-trash">${icon('trash', 16)}Open Trash</button><button class="btn btn-primary" data-action="deep-refresh">Choose Another App</button></div></section>
+        <div class="section-title">Removal details</div><div class="list deep-report">${r.report.map((x) => `<div class="deep-report-row">${icon(x.ok ? 'check' : 'warning', 17)}<div><b>${esc(x.name)}</b>${x.path ? `<span class="deep-path">${esc(x.path)}</span>` : ''}<span>${esc(x.ok ? 'Moved to the Trash' : (x.errors || []).join(' ') || 'Could not be removed.')}</span></div></div>`).join('')}</div></div>`;
+    }
+    if (d.preview) {
+      const p = d.preview;
+      const dataCount = p.items.filter((i) => i.kind !== 'application' && i.selectable !== false).length;
+      return `<div class="fade-in">${head}<button class="btn btn-ghost btn-sm deep-back" data-action="deep-apps">${icon('chevronLeft', 15)}Choose another app</button>
+        <section class="panel deep-identity"><span class="avatar" style="--h:${hue(p.app.name)}">${esc(initial(p.app.name))}</span><div><h2>${esc(p.app.name)}</h2><span class="mono">${esc(p.app.bundleId)}</span><div class="deep-path">${esc(p.app.path)}</div></div><button class="btn btn-secondary btn-sm" data-action="deep-preview" data-id="${esc(p.app.id)}">${icon('refresh', 14)}Refresh Preview</button></section>
+        ${p.running || p.app.running ? `<div class="notice">${icon('running', 17)}<span><b>${esc(p.app.name)} is open.</b> Quit it, then refresh this preview before removing files.</span></div>` : ''}
+        ${d.error ? `<div class="notice" role="alert">${icon('warning', 17)}<span>${esc(d.error)}</span></div>` : ''}
+        <div class="deep-review-note">${icon('eye', 19)}<div><b>Choose what to remove</b><p>${dataCount ? 'Related files are unchecked. They can contain settings, downloads, or local app data. Read each path before including it.' : 'No additional files with an exact ownership match were found in accessible locations.'}</p></div></div>
+        ${(p.notices || []).map((n) => `<div class="notice">${icon('info', 16)}<span>${esc(n)}</span></div>`).join('')}
+        <div class="list deep-files">${p.items.length ? p.items.map(deepItemHtml).join('') : '<div class="empty"><b>No removable files found</b>Refresh the installed app list to try again.</div>'}</div>
+        <details class="deep-limitations"><summary>${icon('shield', 14)}What Deep Delete includes and protects</summary><ul>${(p.limitations?.length ? p.limitations : ['Files are matched by their exact bundle identifier or a known app-specific location. Shared containers, system components, and personal folders are excluded.', 'Some apps store data elsewhere. Deep Delete cannot guarantee the exact free space you had before installation.', 'Files go to the Trash. Space becomes available after you empty it.']).map((n) => `<li>${esc(n)}</li>`).join('')}</ul></details>
+      </div>`;
+    }
+    return `<div class="fade-in">${head}<div class="deep-intro"><div>${icon('shield', 22)}<div><b>Review first. Recover from Trash.</b><p>Pick an app to see its bundle and files matched by its exact identifier or a known app-specific location. Related data stays unchecked until you choose it.</p></div></div><span>System apps and shared files are protected.</span></div>
+      ${d.error ? `<div class="notice" role="alert">${icon('warning', 17)}<span>${esc(d.error)}</span></div>` : ''}
+      ${d.errors.map((n) => `<div class="notice">${icon('info', 16)}<span>${esc(typeof n === 'string' ? n : n.message || n.path || 'Some applications could not be read.')}</span></div>`).join('')}
+      <div class="list-toolbar"><label class="search deep-search">${icon('search', 15)}<input id="deep-filter" type="search" aria-label="Search installed apps" placeholder="Search apps or bundle IDs" value="${esc(d.filter)}" spellcheck="false"></label><div class="spacer"></div><span class="deep-count">${plural(d.apps.filter((a) => !a.protected).length, 'available app')}</span></div>
+      <div id="deep-app-list">${deepAppList()}</div><p class="deep-footnote">Deep Delete always uses the Trash, even if Smart Scan is set to delete immediately. Empty the Trash yourself when you are ready to reclaim the space.</p></div>`;
   }
 
   function viewSettings() {
@@ -569,8 +649,15 @@
       <h1 class="page-title">Settings</h1>
 
       <section class="panel">
+        <h3>Updates</h3>
+        <p>Download the latest source from github.com/zhengzihao2002/cleanMac, build and sign it on this Mac, then open the updated app. The current app and source edits are kept. Updates use extra disk space inside the original cleanMac folder; keep that folder.</p>
+        <button class="btn btn-secondary btn-sm" data-action="update" ${S.update.busy ? 'disabled' : ''}>${icon('refresh', 15)}${S.update.busy ? 'Updating…' : 'Download & Rebuild Update'}</button>
+        <p id="update-status" role="status">${esc(S.update.message)}</p>
+      </section>
+
+      <section class="panel">
         <h3>When cleaning</h3>
-        <p>System-wide items always need your password and are deleted directly.${app.settingsPersisted ? '' : ' (This choice lasts until you quit, because the cleanMac folder is in a location macOS protects.)'}</p>
+        <p>System-wide items always need your password and are deleted directly. Deep Delete always moves reviewed files to the Trash.${app.settingsPersisted ? '' : ' (This choice lasts until you quit, because the cleanMac folder is in a location macOS protects.)'}</p>
         ${modeChoice(S.settings.mode)}
       </section>
 
@@ -599,7 +686,7 @@
           <div class="legend-row"><span class="chip safe">Safe</span><span>macOS or the app rebuilds it automatically. Selected for you.</span></div>
           <div class="legend-row"><span class="chip review">Review</span><span>Removable, but with a side effect — a re-download, a re-sync or a lost backup. Never selected for you.</span></div>
           <div class="legend-row"><span class="chip protected">${icon('lock')}Protected</span><span>Part of System Data that is your data or that macOS needs. Shown for transparency, never removed.</span></div>
-          <div class="legend-row"><span class="chip running">${icon('running')}Open</span><span>The app that owns it is running. Not selected for you; quit the app first.</span></div>
+          <div class="legend-row"><span class="chip running">${icon('running')}Open</span><span>The app that owns it is running. Quit the app before cleaning; files belonging to open apps are skipped.</span></div>
         </div>
       </section>
 
@@ -613,7 +700,7 @@
       <section class="panel about">
         ${logo(44)}
         <div><b>cleanMac ${esc(app.version || '')}</b>
-          <span>${sys.macos ? `macOS ${esc(sys.macos)} · ` : ''}Electron ${esc(app.electron || '')} · No network access, no tracking.</span></div>
+          <span>${sys.macos ? `macOS ${esc(sys.macos)} · ` : ''}Electron ${esc(app.electron || '')} · Network only for updates. No tracking.</span></div>
       </section>
     </div>`;
   }
@@ -621,6 +708,7 @@
   function renderView() {
     let html;
     if (S.view === 'settings') html = viewSettings();
+    else if (S.view === 'deep-delete') html = viewDeepDelete();
     else if (S.view.startsWith('cat:') && S.scan && (S.phase === 'results' || S.phase === 'done')) html = viewCategory(S.view.slice(4));
     else if (S.phase === 'scanning') html = viewScanning();
     else if (S.phase === 'cleaning') html = viewCleaning();
@@ -636,6 +724,17 @@
   }
 
   function renderActionBar() {
+    if (S.view === 'deep-delete') {
+      const preview = S.deep.preview;
+      if (!preview || deepBusy() || S.deep.result) {
+        el.actionBar.innerHTML = '';
+        return;
+      }
+      const items = deepSelectedItems();
+      const bytes = items.reduce((sum, i) => sum + (i.size || 0), 0);
+      el.actionBar.innerHTML = `<div class="action-bar"><div class="ab-info"><div class="ab-size">${esc(fmt(bytes))} selected</div><div class="ab-sub">${plural(items.length, 'item')} · Moves to the Trash</div></div><button class="btn btn-primary" data-action="deep-confirm" ${items.length && !preview.running && !preview.app.running ? '' : 'disabled'}>${icon('eye', 17)}Review Removal</button></div>`;
+      return;
+    }
     const show = S.phase === 'results' && S.view !== 'settings';
     if (!show) {
       el.actionBar.innerHTML = '';
@@ -680,6 +779,16 @@
 
   function closeModal() {
     el.modal.innerHTML = '';
+    $('.app').inert = false;
+    if (modalFocus && modalFocus.isConnected) modalFocus.focus();
+    modalFocus = null;
+  }
+
+  function focusModal() {
+    if (!modalFocus) modalFocus = document.activeElement;
+    $('.app').inert = true;
+    const cancel = $('[data-action="close-modal"]', el.modal);
+    if (cancel) cancel.focus();
   }
 
   function openConfirm() {
@@ -694,7 +803,7 @@
 
     const notes = [];
     if (running.length) {
-      notes.push(`<li class="warn">${icon('running', 16)}<span><b>${esc(running.slice(0, 3).join(', '))}${running.length > 3 ? ` and ${running.length - 3} more` : ''}</b> ${running.length === 1 ? 'is' : 'are'} open. Quit ${running.length === 1 ? 'it' : 'them'} first for the cleanest result.</span></li>`);
+      notes.push(`<li class="warn">${icon('running', 16)}<span><b>${esc(running.slice(0, 3).join(', '))}${running.length > 3 ? ` and ${running.length - 3} more` : ''}</b> ${running.length === 1 ? 'is' : 'are'} open. Quit ${running.length === 1 ? 'it' : 'them'} before cleaning. Files belonging to open apps will be skipped.</span></li>`);
     }
     if (review.length) {
       notes.push(`<li class="review">${icon('eye', 16)}<span>You selected ${plural(review.length, 'item')} marked <b>Review</b>. Make sure you are fine with the side effects described for ${review.length === 1 ? 'it' : 'them'}.</span></li>`);
@@ -716,10 +825,22 @@
         </div>
       </div>
     </div>`;
-    setTimeout(() => {
-      const b = $('#do-clean');
-      if (b) b.focus();
-    }, 50);
+    focusModal();
+  }
+
+  function openDeepConfirm() {
+    const preview = S.deep.preview;
+    const items = deepSelectedItems();
+    if (!preview || !items.length || preview.running || preview.app.running || deepBusy()) return;
+    const bytes = items.reduce((sum, i) => sum + (i.size || 0), 0);
+    const data = items.filter((i) => i.kind !== 'application');
+    el.modal.innerHTML = `<div class="modal-backdrop" data-action="backdrop"><div class="modal deep-confirm" role="dialog" aria-modal="true" aria-labelledby="deep-confirm-title" aria-describedby="deep-confirm-description">
+      <div class="modal-icon">${icon('trash', 28)}</div><h2 id="deep-confirm-title">Remove ${esc(preview.app.name)}${items.some((i) => i.kind === 'application') ? '' : ' files'}?</h2><p id="deep-confirm-description">Move ${plural(items.length, 'reviewed item')} (${esc(fmt(bytes))}) to the Trash.</p>
+      <div class="deep-confirm-files">${items.map((i) => `<div><b>${esc(i.name)}</b><span class="deep-path">${esc(i.path || i.location)}</span></div>`).join('')}</div>
+      <ul class="notes">${data.length ? `<li class="review">${icon('warning', 16)}<span>You included ${plural(data.length, 'related item')}. This can remove app settings and local data. Restore from the Trash before emptying it if needed.</span></li>` : ''}<li>${icon('trash', 16)}<span>Space becomes available after you empty the Trash. Nothing here is deleted immediately.</span></li></ul>
+      <div class="modal-actions"><button class="btn btn-ghost" data-action="close-modal">Cancel</button><button class="btn btn-primary" data-action="deep-remove">Move to Trash</button></div>
+    </div></div>`;
+    focusModal();
   }
 
   /* ============================================================ actions */
@@ -732,10 +853,109 @@
     }
   }
 
-  async function startScan() {
-    if (S.phase === 'scanning' || S.phase === 'cleaning') return;
+  async function loadDeepApps() {
+    if (deepBusy() || S.phase === 'scanning' || S.phase === 'cleaning') return;
     closeModal();
+    S.deep.status = 'loading';
+    S.deep.error = '';
+    S.deep.preview = null;
+    S.deep.result = null;
+    S.deep.selected.clear();
+    render();
+    try {
+      const result = await api.deepApps();
+      S.deep.apps = result.apps || [];
+      S.deep.errors = result.errors || [];
+      S.deep.loaded = true;
+    } catch (e) {
+      S.deep.error = `Could not list applications: ${e.message}`;
+    } finally {
+      S.deep.status = 'idle';
+      render();
+    }
+  }
+
+  async function previewDeepApp(id) {
+    if (deepBusy() || S.phase === 'scanning' || S.phase === 'cleaning') return;
+    const app = S.deep.apps.find((a) => a.id === id);
+    if (!app || app.protected) return;
+    S.deep.status = 'previewing';
+    S.deep.error = '';
+    S.deep.result = null;
+    S.deep.preview = null;
+    S.deep.selected.clear();
+    render();
+    try {
+      const preview = await api.deepPreview(id);
+      S.deep.preview = preview;
+      // App data is never selected implicitly, even if a future backend changes its defaults.
+      S.deep.selected = new Set(preview.items.filter((i) => i.kind === 'application' && i.selectable !== false && i.defaultSelected && !preview.running && !preview.app.running).map((i) => i.id));
+    } catch (e) {
+      S.deep.error = `Could not preview this app: ${e.message}`;
+    } finally {
+      S.deep.status = 'idle';
+      render();
+      el.view.scrollTop = 0;
+    }
+  }
+
+  function toggleDeepItem(id) {
+    const item = S.deep.preview?.items.find((i) => i.id === id);
+    if (!item || item.selectable === false || deepBusy()) return;
+    if (S.deep.selected.has(id)) S.deep.selected.delete(id);
+    else S.deep.selected.add(id);
+    const row = $(`[data-deep-row="${CSS.escape(id)}"]`);
+    if (row) {
+      const selected = S.deep.selected.has(id);
+      row.classList.toggle('selected', selected);
+      const check = row.querySelector('.check');
+      check.classList.toggle('on', selected);
+      check.setAttribute('aria-checked', String(selected));
+    }
+    renderActionBar();
+  }
+
+  async function removeDeepSelection() {
+    const preview = S.deep.preview;
+    const ids = deepSelectedItems().map((i) => i.id);
+    if (!preview || !ids.length || preview.running || preview.app.running || deepBusy()) return;
+    closeModal();
+    S.deep.status = 'removing';
+    S.deep.progress = null;
+    S.deep.error = '';
+    render();
+    try {
+      S.deep.result = await api.deepRemove(preview.id, ids);
+      // The main process invalidates the old scan after a removal attempt.
+      S.scan = null;
+      byId.clear();
+      S.selected.clear();
+      S.expanded.clear();
+      S.cleanResult = null;
+      S.phase = 'idle';
+      S.deep.preview = null;
+      S.deep.selected.clear();
+      S.deep.loaded = false;
+    } catch (e) {
+      S.deep.error = `Removal stopped: ${e.message}. Refresh the preview before trying again.`;
+      // A failed request may have consumed its preview; require a fresh review.
+      S.deep.selected.clear();
+    } finally {
+      S.deep.status = 'idle';
+      await loadSystem();
+      render();
+      el.view.scrollTop = 0;
+    }
+  }
+
+  async function startScan() {
+    if (S.phase === 'scanning' || S.phase === 'cleaning' || deepBusy()) return;
+    closeModal();
+    invalidateDeepPreview();
     S.phase = 'scanning';
+    S.scan = null;
+    byId.clear();
+    S.selected.clear();
     S.view = 'home';
     S.filter = '';
     S.expanded.clear();
@@ -798,6 +1018,7 @@
     const ids = [...S.selected].filter((id) => byId.has(id));
     if (!ids.length) return;
     closeModal();
+    invalidateDeepPreview();
     S.phase = 'cleaning';
     S.view = 'home';
     S.clean = { done: 0, total: ids.length, current: 'Starting…' };
@@ -894,6 +1115,7 @@
   }
 
   function navigate(view) {
+    if (deepBusy()) return;
     if ((S.phase === 'scanning' || S.phase === 'cleaning') && view !== 'settings' && view !== 'home') return;
     if (view.startsWith('cat:') && !S.scan) return;
     if (view !== S.view) S.filter = '';
@@ -903,6 +1125,7 @@
     }
     render();
     el.view.scrollTop = 0;
+    if (view === 'deep-delete' && !S.deep.loaded && !S.deep.result) loadDeepApps();
   }
 
   /* ============================================================= events */
@@ -919,6 +1142,30 @@
     switch (action) {
       case 'scan':
         startScan();
+        break;
+      case 'deep-refresh':
+        loadDeepApps();
+        break;
+      case 'deep-apps':
+        S.deep.preview = null;
+        S.deep.selected.clear();
+        S.deep.error = '';
+        render();
+        break;
+      case 'deep-preview':
+        previewDeepApp(id);
+        break;
+      case 'deep-toggle':
+        toggleDeepItem(id);
+        break;
+      case 'deep-confirm':
+        openDeepConfirm();
+        break;
+      case 'deep-remove':
+        removeDeepSelection();
+        break;
+      case 'deep-reveal':
+        try { await api.deepReveal(S.deep.preview.id, id); } catch (err) { toast(`Could not reveal file: ${err.message}`); }
         break;
       case 'cancel-scan':
         api.cancelScan();
@@ -959,7 +1206,21 @@
         api.openFullDiskAccess();
         break;
       case 'relaunch':
-        api.relaunch();
+        try { await api.relaunch(); } catch (err) { toast(err.message || 'Wait for the current task to finish before relaunching.'); }
+        break;
+      case 'update':
+        if (S.update.busy) break;
+        S.update = { busy: true, message: 'Starting update…' };
+        renderView();
+        try {
+          await api.update();
+          S.update.message = 'Update opened. You can close this version.';
+        } catch (err) {
+          S.update.message = `Update failed. Your current app is unchanged. ${err.message}`;
+        } finally {
+          S.update.busy = false;
+          if (S.view === 'settings') renderView();
+        }
         break;
       case 'open-trash':
         api.openTrash();
@@ -979,6 +1240,12 @@
   });
 
   document.addEventListener('input', (e) => {
+    if (e.target.id === 'deep-filter') {
+      S.deep.filter = e.target.value;
+      const list = $('#deep-app-list');
+      if (list) list.innerHTML = deepAppList();
+      return;
+    }
     if (e.target.id !== 'filter') return;
     S.filter = e.target.value;
     const c = findCat(S.view.slice(4));
@@ -989,12 +1256,24 @@
   });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab' && el.modal.innerHTML) {
+      const focusable = [...el.modal.querySelectorAll('button:not(:disabled), input:not(:disabled), [tabindex="0"]')];
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !el.modal.contains(document.activeElement))) {
+        last?.focus();
+        e.preventDefault();
+      } else if (!e.shiftKey && (document.activeElement === last || !el.modal.contains(document.activeElement))) {
+        first?.focus();
+        e.preventDefault();
+      }
+    }
     if (e.key === 'Escape' && el.modal.innerHTML) {
       closeModal();
       e.preventDefault();
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
-      const f = $('#filter');
+      const f = $('#deep-filter') || $('#filter');
       if (f) {
         f.focus();
         e.preventDefault();
@@ -1011,6 +1290,17 @@
     }
     api.onScanProgress(onScanProgress);
     api.onCleanProgress(onCleanProgress);
+    if (api.onUpdateProgress) api.onUpdateProgress((message) => {
+      S.update.message = message;
+      const node = $('#update-status');
+      if (node) node.textContent = message;
+    });
+    if (api.onDeepProgress) api.onDeepProgress((p) => {
+      S.deep.progress = p;
+      const node = $('#deep-progress');
+      if (node) node.textContent = `${p.done} of ${p.total} · ${p.current || ''}`;
+    });
+    if (api.onNotice) api.onNotice((message) => toast(message, 'info'));
     api.onNavigate((view) => navigate(view));
     api.onCommand((cmd) => {
       if (cmd === 'scan') startScan();

@@ -6,6 +6,8 @@
  */
 
 const { CATEGORIES } = require('./categories');
+const fsp = require('fs/promises');
+const { randomUUID } = require('crypto');
 const { measure, createPool } = require('./sizer');
 const system = require('./system');
 
@@ -43,6 +45,7 @@ async function scan({ home, guard, emit = () => {}, signal, context, categories 
   const ctx = context || (await buildContext({ home, signal }));
   const pool = createPool(6);
   const privateItems = new Map();
+  const scanId = randomUUID();
   let nextId = 1;
   let foundBytes = 0;
   let lastTick = 0;
@@ -106,9 +109,24 @@ async function scan({ home, guard, emit = () => {}, signal, context, categories 
           if (c.unsized || c.paths.length === 0) return { ...c, size: null, partial: false };
           let bytes = 0;
           let partial = false;
+          const identities = [];
           for (const p of c.paths) {
+            let before;
+            try {
+              before = await fsp.lstat(p);
+            } catch {
+              return null;
+            }
             tick(p);
             const r = await measure(p, { signal });
+            let after;
+            try {
+              after = await fsp.lstat(p);
+            } catch {
+              return null;
+            }
+            if (before.dev !== after.dev || before.ino !== after.ino || (before.mode & 0o170000) !== (after.mode & 0o170000)) return null;
+            identities.push({ dev: after.dev, ino: after.ino, mode: after.mode });
             bytes += r.bytes;
             partial = partial || r.partial;
           }
@@ -116,7 +134,7 @@ async function scan({ home, guard, emit = () => {}, signal, context, categories 
             foundBytes += bytes;
             tick(c.paths[0]);
           }
-          return { ...c, size: bytes, partial };
+          return { ...c, size: bytes, partial, identities };
         }),
       ),
     );
@@ -124,7 +142,7 @@ async function scan({ home, guard, emit = () => {}, signal, context, categories 
     for (const item of sized) {
       if (!item) continue;
       if (item.action !== 'none' && item.action !== 'snapshot' && item.size < MIN_BYTES) continue;
-      const id = `i${nextId++}`;
+      const id = `${scanId}_i${nextId++}`;
       const admin = !!item.admin;
       const selectable = item.safety !== 'protected' && item.action !== 'none';
       const priv = { ...item, id, category: cat.id, admin };

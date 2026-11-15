@@ -3,6 +3,7 @@
 const { app, BrowserWindow, ipcMain, shell, Menu, nativeTheme, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { fileURLToPath } = require('url');
 const runtime = require('./runtime');
 
 // Redirect every Electron/Chromium storage location before anything else.
@@ -13,6 +14,8 @@ const { scan } = require('./scanner');
 const { CATEGORIES } = require('./categories');
 const { clean } = require('./cleaner');
 const system = require('./system');
+const { prepareUpdate, launchUpdate } = require('./updater');
+const { createDeepDelete } = require('./deep-delete');
 
 const isMac = process.platform === 'darwin';
 const DEBUG = process.env.CLEANMAC_DEBUG === '1';
@@ -24,13 +27,28 @@ app.setName('cleanMac');
 
 let mainWindow = null;
 let settings = runtime.readSettings(env.settingsFile, DEFAULT_SETTINGS);
+settings = { mode: settings.mode === 'delete' ? 'delete' : 'trash' };
 let scanState = { items: new Map(), controller: null, running: false };
 let cleaning = false;
+let deepBusy = false;
+let updating = false;
 
 const guard = createGuard({
   home: env.home,
   ownPaths: [env.projectRoot, env.sessionDir].filter(Boolean),
 });
+const deep = createDeepDelete({
+  home: env.home,
+  ownPaths: [env.projectRoot, env.sessionDir, app.getAppPath()].filter(Boolean),
+  ownBundleIds: [env.bundleId],
+  trashItem: (p) => shell.trashItem(p),
+});
+
+function requireIdle() {
+  if (updating) throw new Error('Wait for the update to finish.');
+  if (scanState.running) throw new Error('Wait for the scan to finish.');
+  if (cleaning || deepBusy) throw new Error('Wait for the current operation to finish.');
+}
 
 /* ------------------------------------------------------------- window */
 
@@ -60,6 +78,12 @@ function createWindow() {
 
   mainWindow.loadFile(RENDERER, { query: { platform: process.platform } });
   mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.on('close', (event) => {
+    if (cleaning || updating) {
+      event.preventDefault();
+      send('app:notice', 'Please wait for cleanup or the update to finish before closing cleanMac.');
+    }
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -67,7 +91,11 @@ function createWindow() {
   const wc = mainWindow.webContents;
   wc.setWindowOpenHandler(() => ({ action: 'deny' }));
   wc.on('will-navigate', (e, url) => {
-    if (!url.startsWith('file://')) e.preventDefault();
+    try {
+      if (fileURLToPath(new URL(url)) !== RENDERER) e.preventDefault();
+    } catch {
+      e.preventDefault();
+    }
   });
 }
 
@@ -102,6 +130,7 @@ function buildMenu() {
       submenu: [
         { label: 'Start Scan', accelerator: 'CmdOrCtrl+R', click: () => send('app:command', 'scan') },
         { label: 'Overview', accelerator: 'CmdOrCtrl+1', click: nav('home') },
+        { label: 'Deep Delete', accelerator: 'CmdOrCtrl+2', click: nav('deep-delete') },
       ],
     },
     ...(DEBUG || !app.isPackaged ? [{ role: 'viewMenu' }] : []),
@@ -117,8 +146,13 @@ function buildMenu() {
 /* ---------------------------------------------------------------- IPC */
 
 function trusted(event) {
-  const url = event.senderFrame && event.senderFrame.url;
-  return typeof url === 'string' && url.startsWith('file://') && url.includes('/renderer/index.html');
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) return false;
+  try {
+    const url = new URL(event.senderFrame.url);
+    return url.protocol === 'file:' && fileURLToPath(url) === RENDERER;
+  } catch {
+    return false;
+  }
 }
 
 function handle(channel, fn) {
@@ -160,8 +194,8 @@ function registerIpc() {
   );
 
   handle('scan:start', async () => {
-    if (scanState.running) throw new Error('A scan is already running');
-    if (cleaning) throw new Error('Cleaning is in progress');
+    requireIdle();
+    deep.invalidate();
     const controller = new AbortController();
     scanState = { items: new Map(), controller, running: true };
     try {
@@ -185,21 +219,23 @@ function registerIpc() {
   });
 
   handle('clean:start', async (_e, payload) => {
-    if (cleaning) throw new Error('Already cleaning');
-    if (scanState.running) throw new Error('Wait for the scan to finish');
-    const ids = Array.isArray(payload && payload.ids) ? payload.ids.filter((x) => typeof x === 'string') : [];
+    requireIdle();
+    const ids = Array.isArray(payload && payload.ids) ? [...new Set(payload.ids.filter((x) => typeof x === 'string'))] : [];
     const mode = payload && payload.mode === 'delete' ? 'delete' : 'trash';
     const items = ids.map((id) => scanState.items.get(id)).filter(Boolean);
     if (items.length === 0) return { report: [], diskBefore: null, diskAfter: null, mode };
 
     cleaning = true;
+    deep.invalidate();
     try {
+      const running = system.createRunningIndex(await system.runningApps(env.home, { strict: true }));
       const diskBefore = await system.diskInfo(env.home);
       const report = await clean(items, {
         mode,
         guard,
         helperPath: HELPER,
         trashItem: (p) => shell.trashItem(p),
+        running,
         onProgress: (p) => send('clean:progress', p),
       });
       for (const r of report) {
@@ -211,6 +247,52 @@ function registerIpc() {
     } finally {
       cleaning = false;
     }
+  });
+
+  handle('deep:apps', async () => {
+    requireIdle();
+    deepBusy = true;
+    try {
+      return await deep.listApps();
+    } finally {
+      deepBusy = false;
+    }
+  });
+
+  handle('deep:preview', async (_e, appId) => {
+    requireIdle();
+    deepBusy = true;
+    try {
+      return await deep.preview(appId);
+    } finally {
+      deepBusy = false;
+    }
+  });
+
+  handle('deep:remove', async (_e, payload) => {
+    requireIdle();
+    cleaning = true;
+    try {
+      const diskBefore = await system.diskInfo(env.home);
+      const result = await deep.clean({
+        previewId: payload && payload.previewId,
+        ids: payload && payload.ids,
+        onProgress: (p) => send('deep:progress', p),
+      });
+      // A preview may overlap a Smart Scan. Those old capabilities must not
+      // remain usable after any files have been moved or changed.
+      scanState.items.clear();
+      const diskAfter = await system.diskInfo(env.home);
+      return { ...result, diskBefore, diskAfter };
+    } finally {
+      cleaning = false;
+    }
+  });
+
+  handle('deep:reveal', async (_e, payload) => {
+    const target = await deep.revealPath(payload && payload.previewId, payload && payload.id);
+    if (target) shell.showItemInFolder(target);
+    return !!target;
   });
 
   handle('item:reveal', async (_e, id) => {
@@ -237,6 +319,7 @@ function registerIpc() {
   });
 
   handle('app:relaunch', async () => {
+    requireIdle();
     // app.exit() skips 'will-quit', so sweep explicitly.
     runtime.sweepOnExit(env.sessionDir);
     app.relaunch();
@@ -244,6 +327,20 @@ function registerIpc() {
   });
 
   handle('settings:get', async () => ({ ...settings }));
+
+  handle('update:start', async () => {
+    requireIdle();
+    updating = true;
+    try {
+      const result = await prepareUpdate({ projectRoot: env.projectRoot, appPath: app.getAppPath(), currentVersion: app.getVersion(),
+        progress: (message) => send('update:progress', message) });
+      send('update:progress', `Opening cleanMac ${result.version}…`);
+      await launchUpdate(result.application);
+      updating = false;
+      app.quit();
+      return { version: result.version };
+    } finally { updating = false; }
+  });
 
   handle('settings:set', async (_e, patch) => {
     if (patch && (patch.mode === 'trash' || patch.mode === 'delete')) settings.mode = patch.mode;
@@ -258,7 +355,7 @@ app.setAboutPanelOptions({
   applicationName: 'cleanMac',
   applicationVersion: app.getVersion(),
   version: `Electron ${process.versions.electron}`,
-  copyright: 'Runs entirely on your Mac. No network access, no tracking.',
+  copyright: 'Cleanup runs locally. Network access only for requested updates. No tracking.',
 });
 
 app.whenReady().then(() => {
@@ -278,6 +375,15 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => app.quit());
+
+// Closing the window or using Cmd+Q must not terminate a filesystem operation
+// halfway through its reviewed selection.
+app.on('before-quit', (event) => {
+  if (cleaning || updating) {
+    event.preventDefault();
+    send('app:notice', 'Please wait for cleanup or the update to finish before quitting cleanMac.');
+  }
+});
 
 app.on('will-quit', () => {
   if (scanState.controller) scanState.controller.abort();

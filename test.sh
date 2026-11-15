@@ -19,7 +19,8 @@ if [ ! -x "$NODE" ]; then
 fi
 
 export ELECTRON_RUN_AS_NODE=1
+# Every fixture removes its own unique folder. Only remove the empty parent:
+# a second test runner may still be using another fixture in this directory.
+cleanup_tests() { rmdir "$ROOT/.runtime/test" 2>/dev/null || true; }
+trap cleanup_tests EXIT
 "$NODE" "$ROOT/test/run.js"
-status=$?
-rm -rf "$ROOT/.runtime/test"
-exit $status

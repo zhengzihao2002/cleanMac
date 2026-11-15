@@ -12,6 +12,7 @@
  *    the administrator password; the helper re-validates every path itself.
  */
 
+const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
@@ -19,6 +20,43 @@ const { execFile } = require('child_process');
 const { measure } = require('./sizer');
 
 const SNAPSHOT_RE = /^\d{4}-\d{2}-\d{2}-\d{6}$/;
+
+function assertMode(mode) {
+  if (mode !== 'trash' && mode !== 'delete') throw new Error('Invalid cleanup mode. Choose Trash or delete explicitly.');
+}
+
+function safetyError(message) {
+  const err = new Error(message);
+  err.code = 'CLEANMAC_GUARD';
+  return err;
+}
+
+function runningOwner(item, running) {
+  return running && item.runningHints ? running.match(item.runningHints) : item.running;
+}
+
+// A guarded parent must not hide a protected descendant. Check the complete
+// tree before handing it to a recursive remover or to the Trash. Symlinks are
+// checked as entries, never followed, and mounted filesystems are left alone.
+async function validateTree(target, guard) {
+  const parent = await fsp.lstat(path.dirname(target));
+  const stack = [target];
+  while (stack.length) {
+    const p = stack.pop();
+    guard.assert(p);
+    let st;
+    try {
+      st = await fsp.lstat(p);
+    } catch (e) {
+      if (e.code === 'ENOENT') continue;
+      throw e;
+    }
+    if (!st.isDirectory()) continue;
+    if (st.dev !== parent.dev) throw safetyError('Mounted filesystem');
+    for (const name of await fsp.readdir(p)) stack.push(path.join(p, name));
+  }
+  guard.assert(target);
+}
 
 function describe(err) {
   switch (err && err.code) {
@@ -35,7 +73,7 @@ function describe(err) {
   }
 }
 
-async function makeWritable(target) {
+async function makeWritable(target, guard) {
   // Some tools (e.g. Go's module cache) create read-only folders. Make the
   // folders writable for their owner so they can be removed.
   const stack = [target];
@@ -48,6 +86,7 @@ async function makeWritable(target) {
       continue;
     }
     if (!st.isDirectory()) continue;
+    guard.assert(p);
     try {
       await fsp.chmod(p, st.mode | 0o700);
     } catch {
@@ -61,7 +100,7 @@ async function makeWritable(target) {
   }
 }
 
-async function removePath(target, mode, trashItem) {
+async function removePath(target, mode, trashItem, guard) {
   if (mode === 'trash') {
     await trashItem(target);
     return;
@@ -70,7 +109,8 @@ async function removePath(target, mode, trashItem) {
     await fsp.rm(target, { recursive: true, force: true, maxRetries: 2 });
   } catch (e) {
     if (e.code !== 'EACCES' && e.code !== 'EPERM') throw e;
-    await makeWritable(target);
+    await makeWritable(target, guard);
+    await validateTree(target, guard);
     await fsp.rm(target, { recursive: true, force: true, maxRetries: 2 });
   }
 }
@@ -84,16 +124,20 @@ async function exists(p) {
   }
 }
 
-async function cleanUserItem(item, { mode, guard, trashItem }) {
+async function cleanUserItem(item, { mode, guard, trashItem, running }) {
+  assertMode(mode);
   const errors = [];
   let removed = 0;
+  const open = runningOwner(item, running);
+  if (open) return { removed, errors: [`Quit ${open} before cleaning its files, then scan again.`] };
   const attempt = async (target) => {
     try {
       guard.assert(target);
-      await removePath(target, mode, trashItem);
+      await validateTree(target, guard);
+      await removePath(target, mode, trashItem, guard);
       removed++;
     } catch (e) {
-      if (e.code === 'ENOENT' || !(await exists(target))) {
+      if (e.code === 'ENOENT') {
         removed++;
         return;
       }
@@ -101,7 +145,20 @@ async function cleanUserItem(item, { mode, guard, trashItem }) {
     }
   };
 
-  for (const p of item.paths) {
+  for (const [index, p] of item.paths.entries()) {
+    if (item.identities) {
+      try {
+        const expected = item.identities[index];
+        const current = await fsp.lstat(p);
+        if (!expected || expected.dev !== current.dev || expected.ino !== current.ino ||
+            (expected.mode & 0o170000) !== (current.mode & 0o170000)) {
+          throw safetyError('Location changed since the scan; scan again');
+        }
+      } catch (e) {
+        if (e.code !== 'ENOENT') errors.push(describe(e));
+        continue;
+      }
+    }
     if (item.action === 'contents') {
       const v = guard.check(p);
       if (!v.ok) {
@@ -110,6 +167,8 @@ async function cleanUserItem(item, { mode, guard, trashItem }) {
       }
       let children;
       try {
+        const st = await fsp.lstat(p);
+        if (st.isSymbolicLink() || !st.isDirectory()) throw safetyError('Cache location is no longer a real folder');
         children = await fsp.readdir(p);
       } catch (e) {
         if (e.code !== 'ENOENT') errors.push(describe(e));
@@ -129,20 +188,43 @@ function adminPlan(items, guard) {
   const lines = [];
   const refused = new Map();
   for (const item of items) {
+    if (!/^[A-Za-z0-9_-]+$/.test(item.id || '')) {
+      refused.set(item.id, 'Invalid item identifier');
+      continue;
+    }
     if (item.action === 'snapshot') {
       const date = item.meta && item.meta.date;
       if (SNAPSHOT_RE.test(date || '')) lines.push(`${item.id}\tsnapshot\t${date}`);
       else refused.set(item.id, 'Invalid snapshot name');
       continue;
     }
-    for (const p of item.paths) {
+    const itemLines = [];
+    for (const [index, p] of item.paths.entries()) {
       const v = guard.check(p);
-      if (!v.ok || !/^\/(Library\/(Caches|Logs)|private\/var\/log)\//.test(p)) {
+      const ordinary = /^\/Library\/(Caches|Logs)\/[^/]+(?:\/[^/]+)*$/.test(p);
+      const rotated = /^\/private\/var\/log\/(?:[^/]+\/)?[^/]+\.(?:gz|bz2|xz|zip|\d+)$/i.test(p);
+      const permitted = (item.action === 'contents' && ordinary) || (item.action === 'remove' && (ordinary || rotated));
+      if (!v.ok || !permitted || path.normalize(p) !== p || /[\x00-\x1f\x7f]/.test(p)) {
         refused.set(item.id, `Skipped for safety (${(v.reason || 'not a system location').toLowerCase()}).`);
         continue;
       }
-      lines.push(`${item.id}\t${item.action}\t${p}`);
+      if (item.identities) {
+        try {
+          const expected = item.identities[index];
+          const current = fs.lstatSync(p);
+          if (!expected || expected.dev !== current.dev || expected.ino !== current.ino ||
+              (expected.mode & 0o170000) !== (current.mode & 0o170000)) {
+            refused.set(item.id, 'Location changed since the scan. Scan again before cleaning.');
+            continue;
+          }
+        } catch {
+          refused.set(item.id, 'Location is no longer available. Scan again before cleaning.');
+          continue;
+        }
+      }
+      itemLines.push(`${item.id}\t${item.action}\t${p}`);
     }
+    if (!refused.has(item.id)) lines.push(...itemLines);
   }
   return { lines, refused };
 }
@@ -220,7 +302,8 @@ async function remaining(item) {
  * @param {object[]} items       private scanner items
  * @param {object}   opts        { mode: 'trash'|'delete', guard, trashItem, helperPath, onProgress }
  */
-async function clean(items, { mode, guard, trashItem, helperPath, onProgress = () => {} }) {
+async function clean(items, { mode, guard, trashItem, helperPath, running, onProgress = () => {} }) {
+  assertMode(mode);
   const cleanable = items.filter((i) => i.action !== 'none' && i.safety !== 'protected');
   const user = cleanable.filter((i) => !i.admin);
   const admin = cleanable.filter((i) => i.admin);
@@ -230,13 +313,19 @@ async function clean(items, { mode, guard, trashItem, helperPath, onProgress = (
 
   for (const item of user) {
     onProgress({ done, total, current: item.name });
-    outcome.set(item.id, await cleanUserItem(item, { mode, guard, trashItem }));
+    outcome.set(item.id, await cleanUserItem(item, { mode, guard, trashItem, running }));
     done++;
   }
 
   if (admin.length) {
     onProgress({ done, total, current: 'Waiting for your administrator password…', waitingForAdmin: true });
-    const results = await cleanAdminItems(admin, { guard, helperPath });
+    const eligible = admin.filter((item) => {
+      const open = runningOwner(item, running);
+      if (!open) return true;
+      outcome.set(item.id, { removed: 0, errors: [`Quit ${open} before cleaning its files, then scan again.`] });
+      return false;
+    });
+    const results = await cleanAdminItems(eligible, { guard, helperPath });
     for (const [id, r] of results) outcome.set(id, r);
     done += admin.length;
   }
